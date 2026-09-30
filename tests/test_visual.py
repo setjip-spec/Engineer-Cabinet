@@ -31,6 +31,9 @@ class VisualTests(unittest.TestCase):
                     pump();table=app.tables['order'];row=app.cache['order']['rows'][o['id']]
                     self.assertEqual(app.stats[0][0].get(),'3 000 ₽')
                     self.assertEqual(app.stats[1][0].get(),'3 000 ₽')
+                    c.update(o['id'],status='Готово');app.refresh();pump()
+                    self.assertEqual(app.stats[0][0].get(),'0 ₽')
+                    c.update(o['id'],status='В работе');app.refresh();pump()
                     # Click a comment: an editor appears, no card. Enter persists it.
                     x=sum(size for _,_,size in table.columns[:5])+25
                     table.click(SimpleNamespace(x=x,y=24));root.update()
@@ -62,6 +65,9 @@ class VisualTests(unittest.TestCase):
                     self.assertTrue(any(tuple(w['values'])==MONTHS and w.get()=='Январь' for w in combos))
                     for w in root.winfo_children():
                         if isinstance(w,tk.Toplevel):w.destroy()
+                    app.navigate(3);pump()
+                    entries=[w for w in descendants(root) if isinstance(w,ttk.Entry)]
+                    self.assertTrue(any(w.get()==str(c.root) for w in entries))
                     self.assertEqual(errors,[])
                 finally:
                     app.pool.shutdown(wait=True);c.close()

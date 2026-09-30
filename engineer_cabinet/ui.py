@@ -154,7 +154,7 @@ class App:
             box=tk.Frame(cards,bg=bg);box.pack(side='left',fill='both',expand=True,padx=5)
             tk.Label(box,text=label,bg=bg,fg=fg,font=('Segoe UI',10)).pack(padx=12,pady=(6,0))
             v=tk.StringVar(value='0');tk.Label(box,textvariable=v,bg=bg,fg=fg,font=('Segoe UI',20,'bold')).pack(pady=(0,5));counters[status]=v
-        ttk.Label(frame,text='Бонусы всех незавершённых заявок, включая готовые. Показатели не зависят от фильтров.',foreground=MUTED).pack(anchor='w',pady=(0,10))
+        ttk.Label(frame,text='Активные: создано, в работе, пауза. Общие показатели не зависят от фильтров.',foreground=MUTED).pack(anchor='w',pady=(0,10))
         self.stats.append((bonus,counters))
         cols=[('num','№ заявки' if kind=='order' else '№ просчёта',100),('related','Просчёт' if kind=='order' else 'Заявка',90),
               ('created','Дата создания',135),('manager','Менеджер',190)]
@@ -194,7 +194,7 @@ class App:
                 text=f"Найдено: {len(rows)} {'заявок' if kind=='order' else 'просчётов'}"
                 if kind=='quote':text+=f" · Без заявки: {sum(r['order_num'] is None for r in rows)}"
                 self.cache[kind]['count'].configure(text=text+'   •   Комментарий: Enter — сохранить, Esc — отменить')
-            active=[r for r in data['all'] if r['status']!=CLOSED]
+            active=[r for r in data['all'] if r['status'] in STATUSES[:3]]
             for bonus,counters in self.stats:
                 bonus.set(rub(sum(r['earnings'] or 0 for r in active)))
                 for status,var in counters.items():var.set(str(sum(r['status']==status for r in active)))
@@ -422,7 +422,8 @@ class App:
         for label,path in [('Общая папка',self.c.root),('Данные',self.c.db_path.parent),('Заявки',self.c.root/'Заявки'),('Просчёты',self.c.root/'Просчеты'),('Резервные копии',self.c.root/'Резервные копии')]:
             row=ttk.Frame(frame,padding=(0,6));row.pack(fill='x')
             ttk.Label(row,text=label,width=22).pack(side='left')
-            var=tk.StringVar(value=str(path));ttk.Entry(row,textvariable=var,state='readonly').pack(side='left',fill='x',expand=True,padx=12)
+            entry=ttk.Entry(row);entry.insert(0,str(path));entry.configure(state='readonly')
+            entry.pack(side='left',fill='x',expand=True,padx=12)
             ttk.Button(row,text='Открыть папку',command=lambda p=path:self.run(lambda:open_folder(p))).pack(side='right')
         ttk.Label(frame,text='Резервные копии',font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(28,12))
         ttk.Label(frame,text='Каждые 7 дней • Хранятся 3 полные копии базы и файлов.\nЕсли кабинет закрыт, проверка выполняется при следующем запуске.').pack(anchor='w',pady=8)

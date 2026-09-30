@@ -9,7 +9,13 @@ from engineer_cabinet.core import Cabinet, MANAGERS
 from engineer_cabinet.ui import App
 from PIL import Image
 import ctypes
-import win32gui,win32ui,win32con
+from ctypes import wintypes
+ctypes.windll.user32.PrintWindow.argtypes=(wintypes.HWND,wintypes.HDC,wintypes.UINT)
+ctypes.windll.user32.PrintWindow.restype=wintypes.BOOL
+import win32gui,win32ui,win32con,win32api
+mode=win32api.EnumDisplaySettings(None,win32con.ENUM_CURRENT_SETTINGS)
+mode.PelsWidth=1600;mode.PelsHeight=1200
+print("Display mode change:",win32api.ChangeDisplaySettings(mode,0))
 
 out=Path('ui-review');out.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory() as tmp:
