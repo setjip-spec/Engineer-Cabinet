@@ -156,7 +156,7 @@ class App:
             v=tk.StringVar(value='0');tk.Label(box,textvariable=v,bg=bg,fg=fg,font=('Segoe UI',20,'bold')).pack(pady=(0,5));counters[status]=v
         ttk.Label(frame,text='Активные: создано, в работе, пауза. Общие показатели не зависят от фильтров.',foreground=MUTED).pack(anchor='w',pady=(0,10))
         self.stats.append((bonus,counters))
-        cols=[('num','№ заявки' if kind=='order' else '№ просчёта',100),('related','Просчёт' if kind=='order' else 'Заявка',90),
+        cols=[('num','№ заявки' if kind=='order' else '№ просчёта',100 if kind=='order' else 125),('related','Просчёт' if kind=='order' else 'Заявка',90),
               ('created','Дата создания',135),('manager','Менеджер',190)]
         if kind=='order':cols.append(('earnings','Мой бонус',115))
         cols.extend([('comment','Комментарий',250),('status','Статус',170),('actions','Действия',140)])

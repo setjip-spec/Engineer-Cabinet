@@ -134,6 +134,7 @@ class RecordTable(ttk.Frame):
                     c.create_text(x+14,y+self.rh/2,text=self.clip(value,size-28,font),anchor='w',
                         fill=BLUE if key=='related' and r.get('_related_id') else INK,font=font)
                 c.create_line(x+size,y,x+size,y+self.rh,fill=LINE);x+=size
+            c.create_line(0,y,total,y,fill=LINE)
             c.create_line(0,y+self.rh,total,y+self.rh,fill=LINE)
         if not self.rows:
             c.create_text(width/2,75,text='Записей пока нет',fill=MUTED,font=('Segoe UI',15))
