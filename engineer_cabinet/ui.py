@@ -448,6 +448,7 @@ class App:
     def quit(self):
         if self.busy:
             messagebox.showinfo('Операция выполняется','Дождитесь завершения операции перед выходом.');return
+        for timer in self.w.tk.call('after','info'):self.w.after_cancel(timer)
         self.pool.shutdown(wait=False);self.c.close();self.w.destroy()
 
 
