@@ -7,7 +7,9 @@ import tkinter as tk
 import time
 from engineer_cabinet.core import Cabinet, MANAGERS
 from engineer_cabinet.ui import App
-from PIL import ImageGrab
+from PIL import Image
+import ctypes
+import win32gui,win32ui,win32con
 
 out=Path('ui-review');out.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory() as tmp:
@@ -31,5 +33,13 @@ with tempfile.TemporaryDirectory() as tmp:
         app.navigate(i)
         if i==2:app.month.set('Январь');app.report()
         pump()
-        ImageGrab.grab().save(out/(name+'.png'))
+        hwnd=win32gui.GetParent(root.winfo_id())
+        left,top,right,bottom=win32gui.GetWindowRect(hwnd);width=right-left;height=bottom-top
+        dc=win32gui.GetWindowDC(hwnd);source=win32ui.CreateDCFromHandle(dc);memory=source.CreateCompatibleDC()
+        bitmap=win32ui.CreateBitmap();bitmap.CreateCompatibleBitmap(source,width,height);memory.SelectObject(bitmap)
+        result=ctypes.windll.user32.PrintWindow(hwnd,memory.GetSafeHdc(),2)
+        if not result:raise RuntimeError('PrintWindow failed')
+        image=Image.frombuffer('RGB',(width,height),bitmap.GetBitmapBits(True),'raw','BGRX',0,1)
+        image.save(out/(name+'.png'))
+        win32gui.DeleteObject(bitmap.GetHandle());memory.DeleteDC();source.DeleteDC();win32gui.ReleaseDC(hwnd,dc)
     app.quit()

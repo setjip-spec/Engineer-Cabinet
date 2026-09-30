@@ -35,7 +35,7 @@ class App:
         self.pending_refresh=False;self.pending_report=False;self.search_job=None
         self.notice=tk.StringVar(value='Готово');self.stats=[];self.current_page=0
         style=ttk.Style(window);style.theme_use('clam')
-        style.configure('.',font=('Segoe UI',10),background=BG,foreground=INK)
+        style.configure('.',font=('Segoe UI',11),background=BG,foreground=INK)
         style.configure('TFrame',background=BG)
         style.configure('TLabel',background=BG,foreground=INK)
         style.configure('TButton',padding=(15,9),background='white',foreground=INK,bordercolor=LINE,lightcolor='white',darkcolor=LINE)
@@ -70,7 +70,7 @@ class App:
         self.navigate(0);self.refresh();self.w.after(2500,self.scheduled_backup)
 
     def navigate(self,index):
-        if any(table.editor for table in self.tables.values()):
+        if any(table.editor for table in [*self.tables.values(),self.report_table]):
             self.notice.set('Сохраните комментарий клавишей Enter или отмените клавишей Esc.');return
         self.tabs.select(index)
         for i,b in enumerate(self.nav):b.configure(style='Selected.Nav.TButton' if i==index else 'Nav.TButton')
@@ -140,7 +140,9 @@ class App:
         stats=ttk.Frame(frame);stats.pack(fill='x',pady=(0,18));stats.columnconfigure(0,weight=1);stats.columnconfigure(1,weight=1)
         bonusbox=tk.Frame(stats,bg='#e7fbee',highlightthickness=1,highlightbackground='#b8efd0')
         bonusbox.grid(row=0,column=0,sticky='nsew',padx=(0,16))
-        tk.Label(bonusbox,text='◎',font=('Segoe UI',36),fg='#087e30',bg='#e7fbee').pack(side='left',padx=24)
+        coins=tk.Canvas(bonusbox,width=76,height=90,bg='#e7fbee',highlightthickness=0);coins.pack(side='left',padx=16)
+        for x,top,bottom in ((12,43,72),(40,22,60)):
+            for y in range(bottom,top-1,-7):coins.create_oval(x,y,x+27,y+12,fill='#e7fbee',outline='#087e30',width=3)
         body=tk.Frame(bonusbox,bg='#e7fbee');body.pack(side='left',pady=16)
         tk.Label(body,text='Активные бонусы (3%)',bg='#e7fbee',fg='#087e30',font=('Segoe UI',12)).pack(anchor='w')
         bonus=tk.StringVar(value='—');tk.Label(body,textvariable=bonus,bg='#e7fbee',fg='#087e30',font=('Segoe UI',26,'bold')).pack(anchor='w',pady=(3,0))
@@ -158,7 +160,7 @@ class App:
               ('created','Дата создания',135),('manager','Менеджер',190)]
         if kind=='order':cols.append(('earnings','Мой бонус',115))
         cols.extend([('comment','Комментарий',250),('status','Статус',170),('actions','Действия',140)])
-        tree=RecordTable(frame,cols,lambda action,r,e:self.table_action(kind,action,r,e));tree.pack(fill='both',expand=True)
+        tree=RecordTable(frame,cols,lambda action,r,e:self.table_action(kind,action,r,e),can_edit=lambda:not self.busy);tree.pack(fill='both',expand=True)
         self.tables[kind]=tree
         count=ttk.Label(frame,text='',foreground=MUTED);count.pack(anchor='w',pady=(10,4))
         self.cache[kind]={'count':count,'rows':{}}
@@ -367,20 +369,25 @@ class App:
         self.period_choices={}
         self.total=tk.StringVar(value='Выберите месяц')
         tk.Label(frame,textvariable=self.total,font=('Segoe UI',22,'bold'),bg='#e7fbee',fg='#087e30',anchor='w',padx=22,pady=22).pack(fill='x',pady=20)
-        cols=('num','manager','amount','rate','bonus','comment')
-        wrap=ttk.Frame(frame);wrap.pack(fill='both',expand=True)
-        self.report_table=ttk.Treeview(wrap,columns=cols,show='headings',selectmode='browse')
-        for c,label,width in zip(cols,['Заявка','Менеджер','Общая сумма, ₽','Ставка','Мой заработок, ₽','Комментарий'],[100,210,160,85,175,310]):
-            self.report_table.heading(c,text=label);self.report_table.column(c,width=width,stretch=c=='comment',minwidth=70)
-        scroll=ttk.Scrollbar(wrap,orient='vertical',command=self.report_table.yview);scroll.pack(side='right',fill='y')
-        self.report_table.configure(yscrollcommand=scroll.set);self.report_table.pack(fill='both',expand=True)
-        self.report_table.bind('<Double-1>',lambda e:self.card(self.report_table.selection()[0]) if self.report_table.selection() else None)
+        cols=[('num','Заявка',100),('manager','Менеджер',210),('amount','Общая сумма',160),
+              ('rate','Ставка',90),('bonus','Мой заработок',175),('comment','Комментарий',260),('actions','Действия',140)]
+        self.report_table=RecordTable(frame,cols,self.report_action,can_edit=lambda:not self.busy)
+        self.report_table.pack(fill='both',expand=True)
         actions=ttk.Frame(frame);actions.pack(fill='x',pady=12)
         def card():
             selected=self.report_table.selection()
             if selected:self.card(selected[0])
         ttk.Button(actions,text='Открыть карточку и папки',command=card).pack(side='left')
         ttk.Label(actions,text='Итог учитывает исправления суммы и месяца',foreground=MUTED).pack(side='right')
+
+    def report_action(self,action,r,event):
+        if action=='refresh':self.report();return
+        if action=='comment':
+            if self.busy:return
+            def saved(_):
+                self.report_table.cancel_edit();self.pending_refresh=True;self.report()
+            self.run(lambda:self.c.update(r['id'],comment=event),saved)
+        else:self.table_action('order',action,r,event)
 
     def pick_period(self,e=None):
         period=self.period_choices.get(self.period_list.get())
@@ -389,13 +396,19 @@ class App:
 
     def report(self):
         if self.busy:self.pending_report=True;return
+        if self.report_table.editor:
+            self.notice.set('Enter — сохранить комментарий, Esc — отменить.');return
         y=self.year.get();m=month_number(self.month.get())
         def work():
             if not y.isdigit() or not 1<=int(y)<=9999 or m is None:raise CabinetError('Укажите год и месяц.')
             return self.c.report(int(y),m),self.c.periods()
         def done(data):
-            (rows,total),periods=data;self.report_table.delete(*self.report_table.get_children())
-            for r in rows:self.report_table.insert('','end',iid=r['id'],values=(f"{r['num']:05d}",r['manager'],rub(r['amount']),'3%',rub(r['earnings']),r['comment']))
+            (rows,total),periods=data
+            for r in rows:
+                r['_related_id']=r['quote_id']
+                r['_cells']={'num':f"{r['num']:05d}",'manager':r['manager'],'amount':rub(r['amount']),
+                    'rate':'3%','bonus':rub(r['earnings']),'comment':r['comment']}
+            self.report_table.set_rows(rows)
             self.total.set(f'{MONTHS[m-1]} {y}   •   {rub(total)}   •   Заявок: {len(rows)}')
             self.period_choices={f'{MONTHS[month-1]} {year}':(year,month) for year,month in periods}
             self.period_list['values']=list(self.period_choices)

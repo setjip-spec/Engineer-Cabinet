@@ -50,12 +50,12 @@ def icon(c,kind,x,y,color=INK):
 
 class RecordTable(ttk.Frame):
     """Virtual canvas grid with inline editing, status pills and independent actions."""
-    def __init__(self,parent,columns,on_action):
+    def __init__(self,parent,columns,on_action,can_edit=lambda:True):
         super().__init__(parent)
-        self.columns=columns;self.on_action=on_action;self.rows=[];self.selected_id=None
+        self.can_edit=can_edit;self.columns=columns;self.on_action=on_action;self.rows=[];self.selected_id=None
         self.editor=None;self.hits=[];self.offset=0;self.start=0
-        self.font=Font(family='Segoe UI',size=10)
-        self.bold=Font(family='Segoe UI',size=10,weight='bold')
+        self.font=Font(family='Segoe UI',size=11)
+        self.bold=Font(family='Segoe UI',size=11,weight='bold')
         self.rh=max(48,self.font.metrics('linespace')+26);self.hh=self.rh-6
         self.header=tk.Canvas(self,height=self.hh,bg='#f0f4fa',highlightthickness=0)
         self.header.grid(row=0,column=0,sticky='ew')
@@ -106,7 +106,7 @@ class RecordTable(ttk.Frame):
         self.offset=min(max(0,self.offset),max(0,total-width))
         x=-self.offset
         for (key,label,_),size in zip(self.columns,sizes):
-            h.create_text(x+14,self.hh/2,text=label,anchor='w',fill=INK,font=self.font)
+            h.create_text(x+14,self.hh/2,text=self.clip(label,size-20),anchor='w',fill=INK,font=self.font)
             h.create_line(x+size,0,x+size,self.hh,fill=LINE);x+=size
         h.create_line(0,self.hh-1,max(width,total),self.hh-1,fill=LINE)
         for ri,r in enumerate(self.rows[self.start:self.start+capacity+1]):
@@ -199,6 +199,7 @@ class RecordTable(ttk.Frame):
             x+=size
 
     def edit(self,r,x,y,width):
+        if not self.can_edit():return
         self.cancel_edit();entry=ttk.Entry(self.canvas,font=self.font)
         self.editor=entry;entry.insert(0,r['comment']);entry.place(x=x+10,y=y+7,width=width-20,height=self.rh-14)
         entry.focus_set();entry.icursor('end')
