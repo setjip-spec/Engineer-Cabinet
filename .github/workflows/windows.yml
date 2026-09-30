@@ -1,4 +1,4 @@
-name: Windows prototype
+name: Windows desktop
 on:
   push:
     branches: [main, 'feature/**']
@@ -19,6 +19,15 @@ jobs:
         env:
           CABINET_UI_TESTS: '1'
         run: python -m unittest discover -s tests -v
+      - name: Capture actual desktop screens
+        run: |
+          python -m pip install Pillow
+          python scripts/capture_ui.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UI-review
+          path: ui-review/
+          retention-days: 14
       - name: Install packaging tool
         run: python -m pip install PyInstaller==6.22.3
       - name: Build portable executable
@@ -37,3 +46,4 @@ jobs:
           path: dist/EngineerCabinet/
           if-no-files-found: error
           retention-days: 14
+
