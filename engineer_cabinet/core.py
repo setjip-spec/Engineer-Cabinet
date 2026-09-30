@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import uuid
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -489,7 +489,7 @@ class Cabinet:
             final=dest/('cabinet-'+stamp+'.zip')
             try:
                 snap=work/'cabinet.sqlite3'
-                with sqlite3.connect(snap) as target:
+                with closing(sqlite3.connect(snap)) as target:
                     self.db.backup(target)
                 manifest={'schema':1,'created':now.isoformat(),'root':str(self.root),'external':[]}
                 with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED) as z:
@@ -558,7 +558,7 @@ def restore_backup(archive, destination):
             if not isinstance(arc,str) or not arc.startswith('Дополнительные папки/') or '..' in Path(arc).parts or '\\' in arc or ':' in arc:
                 raise CabinetError('Некорректная привязка в архиве.')
         z.extractall(destination)
-    with sqlite3.connect(destination/'Данные'/'cabinet.sqlite3') as db:
+    with closing(sqlite3.connect(destination/'Данные'/'cabinet.sqlite3')) as db, db:
         if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise CabinetError('Копия базы повреждена.')
         for x in manifest.get('external',[]):db.execute('UPDATE records SET folder=? WHERE id=?',(x['archive'],x['id']))
     return str(destination)
