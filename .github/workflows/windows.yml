@@ -1,0 +1,39 @@
+name: Windows prototype
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Domain, filesystem and window tests
+        env:
+          CABINET_UI_TESTS: '1'
+        run: python -m unittest discover -s tests -v
+      - name: Install packaging tool
+        run: python -m pip install PyInstaller==6.22.3
+      - name: Build portable executable
+        run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name EngineerCabinet main.py
+      - name: Test packaged executable
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath .\dist\EngineerCabinet\EngineerCabinet.exe -ArgumentList '--smoke-test' -PassThru
+          if (-not $app.WaitForExit(30000)) { $app.Kill(); throw 'Packaged app timed out' }
+          if ($app.ExitCode -ne 0) { throw "Packaged app exited with $($app.ExitCode)" }
+      - name: Include instructions
+        run: Copy-Item docs/RUN_WINDOWS.md dist/EngineerCabinet/READ_ME.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EngineerCabinet-Windows
+          path: dist/EngineerCabinet/
+          if-no-files-found: error
+          retention-days: 14
