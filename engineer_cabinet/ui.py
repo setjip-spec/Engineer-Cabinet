@@ -1,4 +1,4 @@
-"""Functional forms for acceptance testing; final visual design is a later stage."""
+"""Local cabinet interface based on the approved October 2026 visual."""
 import json
 import os
 import queue
@@ -11,6 +11,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .core import Cabinet, CabinetError, MANAGERS, STATUSES, CLOSED, earnings
+from .widgets import RecordTable, BG, INK, BLUE, MUTED, LINE, MONTHS, rub, month_number
 
 
 def open_folder(path):
@@ -27,23 +28,67 @@ def open_folder(path):
 class App:
     def __init__(self, window, cabinet):
         self.w=window;self.c=cabinet
-        self.w.title('Личный кабинет инженера — рабочий прототип')
-        self.w.geometry('1350x780')
+        self.w.title('Личный кабинет инженера')
+        self.w.geometry('1440x940');self.w.minsize(1080,680);self.w.configure(bg=BG)
         self.pool=ThreadPoolExecutor(max_workers=1)
         self.results=queue.Queue();self.busy=False;self.tables={};self.filters={};self.cache={}
-        self.notice=tk.StringVar(value=str(self.c.root))
-        top=ttk.Frame(window,padding=8);top.pack(fill='x')
-        ttk.Label(top,text='Личный кабинет инженера',font=('Segoe UI',16)).pack(side='left')
-        ttk.Button(top,text='Настройки / папки',command=self.settings).pack(side='right')
-        ttk.Label(window,textvariable=self.notice,wraplength=1250).pack(fill='x',padx=8)
-        self.tabs=ttk.Notebook(window);self.tabs.pack(fill='both',expand=True,padx=8,pady=8)
-        for kind,title in [('order','Заявки'),('quote','Просчёты')]:
-            self.build_list(kind,title)
-        self.build_report()
-        self.w.after(50,self.drain)
-        self.w.protocol('WM_DELETE_WINDOW',self.quit)
+        self.pending_refresh=False;self.pending_report=False;self.search_job=None
+        self.notice=tk.StringVar(value='Готово');self.stats=[];self.current_page=0
+        style=ttk.Style(window);style.theme_use('clam')
+        style.configure('.',font=('Segoe UI',11),background=BG,foreground=INK)
+        style.configure('TFrame',background=BG)
+        style.configure('TLabel',background=BG,foreground=INK)
+        style.configure('TButton',padding=(15,9),background='white',foreground=INK,bordercolor=LINE,lightcolor='white',darkcolor=LINE)
+        style.map('TButton',background=[('active','#eaf2ff')])
+        style.configure('Primary.TButton',background=BLUE,foreground='white',bordercolor=BLUE)
+        style.map('Primary.TButton',background=[('active','#0057e0')],foreground=[('active','white')])
+        style.configure('Nav.TButton',background=BG,foreground=MUTED,borderwidth=0,font=('Segoe UI',12,'bold'),padding=(20,12))
+        style.configure('Selected.Nav.TButton',background='#dcecff',foreground=BLUE)
+        style.configure('TEntry',padding=9,fieldbackground='white',bordercolor=LINE)
+        style.configure('TCombobox',padding=8,fieldbackground='white',background='white',bordercolor=LINE,arrowsize=15)
+        style.map('TCombobox',fieldbackground=[('readonly','white')],selectbackground=[('readonly','white')],selectforeground=[('readonly',INK)])
+        style.configure('Treeview',rowheight=44,background='white',fieldbackground='white',bordercolor=LINE)
+        style.configure('Treeview.Heading',padding=10,background='#eff4fb',foreground=INK)
+        style.map('Treeview',background=[('selected','#dcecff')],foreground=[('selected',INK)])
+        style.layout('Pages.TNotebook',[]);style.layout('Pages.TNotebook.Tab',[])
+        top=ttk.Frame(window,padding=(20,12));top.pack(fill='x')
+        self.nav=[]
+        for i,text in enumerate(('☷  Заявки','▦  Просчёты','▥  Отчётность','⚙  Настройки')):
+            b=ttk.Button(top,text=text,style='Nav.TButton',command=lambda n=i:self.navigate(n))
+            b.pack(side='left',padx=(0,8));self.nav.append(b)
+        ttk.Button(top,text='＋  Просчёт',style='Primary.TButton',command=lambda:self.create_dialog('quote')).pack(side='right',padx=(10,0))
+        ttk.Button(top,text='＋  Заявка',command=lambda:self.create_dialog('order')).pack(side='right')
+        ttk.Separator(window).pack(fill='x')
+        self.tabs=ttk.Notebook(window,style='Pages.TNotebook');self.tabs.pack(fill='both',expand=True,padx=20,pady=(12,0))
+        for kind,title in [('order','Заявки'),('quote','Просчёты')]:self.build_list(kind,title)
+        self.build_report();self.build_settings()
+        footer=ttk.Frame(window,padding=(22,10));footer.pack(fill='x')
+        ttk.Label(footer,textvariable=self.notice,foreground=MUTED).pack(side='left')
+        ttk.Label(footer,text='Локальная база • 3%',foreground=MUTED).pack(side='right')
+        self.tabs.bind('<<NotebookTabChanged>>',self.page_changed)
+        self.w.after(50,self.drain);self.w.protocol('WM_DELETE_WINDOW',self.quit)
+        self.navigate(0);self.refresh();self.w.after(2500,self.scheduled_backup)
+
+    def navigate(self,index):
+        if any(table.editor for table in [*self.tables.values(),self.report_table]):
+            self.notice.set('Сохраните комментарий клавишей Enter или отмените клавишей Esc.');return
+        self.tabs.select(index)
+        for i,b in enumerate(self.nav):b.configure(style='Selected.Nav.TButton' if i==index else 'Nav.TButton')
+        self.current_page=index
+        if index==2:self.report()
+
+    def page_changed(self,e=None):
+        index=self.tabs.index('current');self.current_page=index
+        for i,b in enumerate(self.nav):b.configure(style='Selected.Nav.TButton' if i==index else 'Nav.TButton')
+        if index==2:self.report()
+
+    def changed_filter(self,e=None):
+        if self.search_job:self.w.after_cancel(self.search_job)
+        self.search_job=self.w.after(200,self.refresh)
+
+    def reset_filters(self,kind):
+        for var,value in zip(self.filters[kind],('Все','Все менеджеры','','Все','Все статусы')):var.set(value)
         self.refresh()
-        self.w.after(2500,self.scheduled_backup)
 
     def run(self, work, done=None, quiet=False):
         if self.busy:
@@ -63,66 +108,129 @@ class App:
                 ok,value,done,quiet=self.results.get_nowait()
                 self.busy=False
                 if ok:
-                    self.notice.set('Сохранено / обновлено. '+str(self.c.root))
+                    self.notice.set('Готово • Данные обновлены')
                     if done: done(value)
                 else:
                     self.notice.set(str(value))
                     if not quiet: messagebox.showerror('Операция не выполнена',str(value),parent=self.w)
         except queue.Empty:
             pass
+        if not self.busy:
+            if self.pending_refresh:
+                self.pending_refresh=False;self.refresh()
+            elif self.pending_report:
+                self.pending_report=False;self.report()
         self.w.after(50,self.drain)
 
     def build_list(self,kind,title):
         frame=ttk.Frame(self.tabs);self.tabs.add(frame,text=title)
-        bar=ttk.Frame(frame,padding=5);bar.pack(fill='x')
-        group=tk.StringVar(value='Активные');manager=tk.StringVar();suffix=tk.StringVar();link=tk.StringVar(value='Все')
-        self.filters[kind]=(group,manager,suffix,link)
-        groups=['Активные','Готовые','Все']+(['Завершённые'] if kind=='order' else [])
-        for var,values,width in [(group,groups,15),(manager,['',*sorted(MANAGERS)],23),(link,['Все','Со связью','Без связи'],14)]:
-            combo=ttk.Combobox(bar,textvariable=var,values=values,state='readonly',width=width)
-            combo.pack(side='left',padx=3);combo.bind('<<ComboboxSelected>>',lambda e:self.refresh())
-        ttk.Label(bar,text='Конец номера:').pack(side='left')
-        entry=ttk.Entry(bar,textvariable=suffix,width=9);entry.pack(side='left');entry.bind('<Return>',lambda e:self.refresh())
-        ttk.Button(bar,text='Найти',command=self.refresh).pack(side='left',padx=3)
-        ttk.Button(bar,text='Создать',command=lambda:self.create_dialog(kind)).pack(side='right')
-        tools=ttk.Frame(frame);tools.pack(fill='x')
-        for text,cmd in [('Карточка',lambda:self.selected_card(kind)),('Папка записи',lambda:self.selected_folder(kind)),
-                         ('Папка просчёта',lambda:self.selected_folder(kind,True)),('Обновить',self.refresh)]:
-            ttk.Button(tools,text=text,command=cmd).pack(side='left',padx=3,pady=3)
-        ttk.Label(tools,text='Комментарий: двойной щелчок по ячейке').pack(side='right')
-        cols=('num','related','created','manager','status','earnings','comment','folder_state')
-        tree=ttk.Treeview(frame,columns=cols,show='headings',selectmode='browse')
-        labels=('Номер','Просчёт' if kind=='order' else 'Заявка ✓','Создан','Менеджер','Статус','Мой бонус, ₽','Комментарий','Папка')
-        for name,label,width in zip(cols,labels,[85,90,95,185,115,95,310,80]):
-            tree.heading(name,text=label);tree.column(name,width=width,stretch=name=='comment')
-        if kind=='quote':
-            tree['displaycolumns']=tuple(c for c in cols if c!='earnings')
-        for status,color in [('Создан','#ffffff'),('В работе','#dbeafe'),('Пауза','#fed7aa'),('Готово','#dcfce7'),(CLOSED,'#86b994')]:
-            tree.tag_configure(status,background=color)
-        scroll=ttk.Scrollbar(frame,orient='vertical',command=tree.yview);scroll.pack(side='right',fill='y')
-        tree.configure(yscrollcommand=scroll.set);tree.pack(fill='both',expand=True)
-        tree.bind('<Double-1>',lambda e:self.cell_double(kind,e))
-        tree.bind('<ButtonRelease-1>',lambda e:self.row_click(kind,e))
+        bar=ttk.Frame(frame);bar.pack(fill='x',pady=(4,18))
+        group=tk.StringVar(value='Все');manager=tk.StringVar(value='Все менеджеры')
+        suffix=tk.StringVar();link=tk.StringVar(value='Все');status=tk.StringVar(value='Все статусы')
+        self.filters[kind]=(group,manager,suffix,link,status)
+        groups=['Все','Активные','Готовые']+(['Завершённые'] if kind=='order' else ['С заявкой','Без заявки'])
+        for i,(label,var,values) in enumerate((('Поиск по номеру',suffix,None),('Менеджер',manager,['Все менеджеры',*sorted(MANAGERS)]),
+                ('Статус',status,['Все статусы',*STATUSES]+([CLOSED] if kind=='order' else [])),('Показать',group,groups))):
+            cell=ttk.Frame(bar);cell.grid(row=0,column=i,sticky='ew',padx=(0,16));bar.columnconfigure(i,weight=1)
+            ttk.Label(cell,text=label).pack(anchor='w',pady=(0,7))
+            widget=ttk.Entry(cell,textvariable=var,width=20) if values is None else ttk.Combobox(cell,textvariable=var,values=values,state='readonly',width=22)
+            widget.pack(fill='x');widget.bind('<<ComboboxSelected>>',self.changed_filter)
+            if values is None:var.trace_add('write',lambda *a:self.changed_filter())
+        ttk.Button(bar,text='⟳  Сбросить фильтры',command=lambda:self.reset_filters(kind)).grid(row=0,column=4,sticky='s')
+        stats=ttk.Frame(frame);stats.pack(fill='x',pady=(0,18));stats.columnconfigure(0,weight=1);stats.columnconfigure(1,weight=1)
+        bonusbox=tk.Frame(stats,bg='#e7fbee',highlightthickness=1,highlightbackground='#b8efd0')
+        bonusbox.grid(row=0,column=0,sticky='nsew',padx=(0,16))
+        coins=tk.Canvas(bonusbox,width=76,height=90,bg='#e7fbee',highlightthickness=0);coins.pack(side='left',padx=16)
+        for x,top,bottom in ((12,43,72),(40,22,60)):
+            for y in range(bottom,top-1,-7):coins.create_oval(x,y,x+27,y+12,fill='#e7fbee',outline='#087e30',width=3)
+        body=tk.Frame(bonusbox,bg='#e7fbee');body.pack(side='left',pady=16)
+        tk.Label(body,text='Активные бонусы (3%)',bg='#e7fbee',fg='#087e30',font=('Segoe UI',12)).pack(anchor='w')
+        bonus=tk.StringVar(value='—');tk.Label(body,textvariable=bonus,bg='#e7fbee',fg='#087e30',font=('Segoe UI',26,'bold')).pack(anchor='w',pady=(3,0))
+        panel=tk.Frame(stats,bg='white',highlightthickness=1,highlightbackground=LINE);panel.grid(row=0,column=1,sticky='nsew')
+        tk.Label(panel,text='Статистика активных заявок',font=('Segoe UI',10,'bold'),bg='white',fg=INK).pack(anchor='w',padx=16,pady=(10,5))
+        cards=tk.Frame(panel,bg='white');cards.pack(fill='both',expand=True,padx=10,pady=(0,10))
+        counters={}
+        for i,(status,label,bg,fg) in enumerate((('Создан','●  Создано','#f1f4f9',MUTED),('В работе','●  В работе','#eaf4ff',BLUE),('Пауза','●  На паузе','#fff3e5','#e77800'))):
+            box=tk.Frame(cards,bg=bg);box.pack(side='left',fill='both',expand=True,padx=5)
+            tk.Label(box,text=label,bg=bg,fg=fg,font=('Segoe UI',10)).pack(padx=12,pady=(6,0))
+            v=tk.StringVar(value='0');tk.Label(box,textvariable=v,bg=bg,fg=fg,font=('Segoe UI',20,'bold')).pack(pady=(0,5));counters[status]=v
+        ttk.Label(frame,text='Активные: создано, в работе, пауза. Общие показатели не зависят от фильтров.',foreground=MUTED).pack(anchor='w',pady=(0,10))
+        self.stats.append((bonus,counters))
+        cols=[('num','№ заявки' if kind=='order' else '№ просчёта',100 if kind=='order' else 125),('related','Просчёт' if kind=='order' else 'Заявка',90),
+              ('created','Дата создания',135),('manager','Менеджер',190)]
+        if kind=='order':cols.append(('earnings','Мой бонус',115))
+        cols.extend([('comment','Комментарий',250),('status','Статус',170),('actions','Действия',140)])
+        tree=RecordTable(frame,cols,lambda action,r,e:self.table_action(kind,action,r,e),can_edit=lambda:not self.busy);tree.pack(fill='both',expand=True)
         self.tables[kind]=tree
-        count=ttk.Label(frame,text='');count.pack(anchor='w',padx=5);self.cache[kind]={'count':count,'rows':{}}
+        count=ttk.Label(frame,text='',foreground=MUTED);count.pack(anchor='w',pady=(10,4))
+        self.cache[kind]={'count':count,'rows':{}}
 
     def refresh(self):
+        self.search_job=None
+        if self.busy:self.pending_refresh=True;return
+        if any(t.editor for t in self.tables.values()):
+            self.notice.set('Enter — сохранить комментарий, Esc — отменить.');return
         args={k:tuple(v.get() for v in self.filters[k]) for k in self.tables}
         def work():
-            return {k:self.c.rows(k,*values) for k,values in args.items()}
+            data={}
+            for k,(group,manager,suffix,link,status) in args.items():
+                if group in ('С заявкой','Без заявки'):
+                    link='Со связью' if group=='С заявкой' else 'Без связи';group='Все'
+                rows=self.c.rows(k,group,'' if manager=='Все менеджеры' else manager,suffix,link)
+                data[k]=[r for r in rows if status=='Все статусы' or r['status']==status]
+            data['all']=self.c.rows('order')
+            return data
         def done(data):
-            for kind,rows in data.items():
-                tree=self.tables[kind];selected=tree.selection();y=tree.yview()[0]
-                tree.delete(*tree.get_children());self.cache[kind]['rows']={r['id']:r for r in rows}
+            order_by_quote={r['quote_id']:r['id'] for r in data['all'] if r['quote_id']}
+            for kind in self.tables:
+                rows=data[kind];self.cache[kind]['rows']={r['id']:r for r in rows}
                 for r in rows:
                     rel=r['quote_num'] if kind=='order' else r['order_num']
-                    tree.insert('','end',iid=r['id'],values=(f"№{r['num']:05d}",f'№{rel:05d}' if rel is not None else '',r['created'],r['manager'],r['status'],
-                        '' if r['earnings'] is None else f"{r['earnings']:,}".replace(',',' '),r['comment'],
-                        {'ready':'Готова','pending':'Подготовка','error':'Ошибка'}.get(r['folder_state'],r['folder_state'])),tags=(r['status'],))
-                if selected and tree.exists(selected[0]):tree.selection_set(selected[0])
-                tree.yview_moveto(y)
-                self.cache[kind]['count'].configure(text=f'Показано: {len(rows)}; без связи: {sum((r["quote_num"] if kind=="order" else r["order_num"]) is None for r in rows)}')
+                    r['_related_id']=r['quote_id'] if kind=='order' else order_by_quote.get(r['id'])
+                    r['_cells']={'num':f"{r['num']:05d}",'related':f'{rel:05d}' if rel is not None else '—',
+                        'created':date.fromisoformat(r['created']).strftime('%d.%m.%Y'),'manager':r['manager'],
+                        'earnings':rub(r['earnings']),'comment':r['comment']}
+                self.tables[kind].set_rows(rows)
+                text=f"Найдено: {len(rows)} {'заявок' if kind=='order' else 'просчётов'}"
+                if kind=='quote':text+=f" · Без заявки: {sum(r['order_num'] is None for r in rows)}"
+                self.cache[kind]['count'].configure(text=text+'   •   Комментарий: Enter — сохранить, Esc — отменить')
+            active=[r for r in data['all'] if r['status'] in STATUSES[:3]]
+            for bonus,counters in self.stats:
+                bonus.set(rub(sum(r['earnings'] or 0 for r in active)))
+                for status,var in counters.items():var.set(str(sum(r['status']==status for r in active)))
         self.run(work,done)
+
+    def table_action(self,kind,action,r,event):
+        if action=='refresh':self.refresh();return
+        if self.busy:self.notice.set('Дождитесь окончания текущей операции.');return
+        rid=r['id']
+        if action=='card':self.card(rid)
+        elif action=='related':self.card(r['_related_id'])
+        elif action=='comment':
+            def saved(_):self.tables[kind].cancel_edit();self.refresh()
+            self.run(lambda:self.c.update(rid,comment=event),saved)
+        elif action=='folder':self.run(lambda:open_folder(self.c.path(r['folder'])))
+        elif action=='related_folder':
+            def work():return open_folder(self.c.path(self.c.get(r['_related_id'])['folder']))
+            self.run(work)
+        elif action in ('menu','status'):
+            menu=tk.Menu(self.w,tearoff=0,font=('Segoe UI',11),bg='white',fg=INK,activebackground='#e2f0ff',activeforeground=BLUE)
+            if action=='status':
+                if r['status']==CLOSED:menu.add_command(label='Изменить месяц закрытия…',command=lambda:self.card(rid))
+                else:
+                    for status in STATUSES:
+                        menu.add_command(label=status,command=lambda v=status:self.run(lambda:self.c.update(rid,status=v),lambda _:self.refresh()))
+                    if kind=='order':menu.add_separator();menu.add_command(label='Завершить — выбрать месяц…',command=lambda:self.card(rid))
+            else:
+                menu.add_command(label='Открыть карточку',command=lambda:self.card(rid))
+                if kind=='order':
+                    menu.add_command(label='Изменить сумму',command=lambda:self.card(rid,'amount'))
+                    menu.add_command(label='Изменить менеджера',command=lambda:self.card(rid,'manager'))
+                menu.add_separator()
+                menu.add_command(label='Открыть папку '+('заявки' if kind=='order' else 'просчёта'),command=lambda:self.table_action(kind,'folder',r,None))
+                menu.add_command(label='Открыть папку '+('просчёта' if kind=='order' else 'заявки'),state='normal' if r.get('_related_id') else 'disabled',command=lambda:self.table_action(kind,'related_folder',r,None))
+            try:menu.tk_popup(event.x_root,event.y_root)
+            finally:menu.grab_release()
 
     def selected(self,kind):
         selected=self.tables[kind].selection()
@@ -140,33 +248,6 @@ class App:
         if not path:
             messagebox.showinfo('Папка','У заявки нет связанного просчёта.');return
         self.run(lambda:open_folder(self.c.path(path)))
-
-    def row_click(self,kind,event):
-        tree=self.tables[kind];row=tree.identify_row(event.y);col=tree.identify_column(event.x)
-        if not row:return
-        visible=tuple(tree['displaycolumns'])
-        if visible==('#all',):visible=tuple(tree['columns'])
-        i=int(col[1:])-1 if col.startswith('#') else -1
-        if i>=0 and visible[i] not in ('comment',):
-            self.card(row)
-
-    def cell_double(self,kind,event):
-        tree=self.tables[kind];rid=tree.identify_row(event.y);col=tree.identify_column(event.x)
-        if not rid:return
-        visible=tuple(tree['displaycolumns'])
-        if visible==('#all',):visible=tuple(tree['columns'])
-        i=int(col[1:])-1 if col.startswith('#') else -1
-        if i<0 or visible[i]!='comment':return
-        bbox=tree.bbox(rid,col)
-        if not bbox:return
-        x,y,w,h=bbox;entry=ttk.Entry(tree);entry.insert(0,self.cache[kind]['rows'][rid]['comment'])
-        entry.place(x=x,y=y,width=w,height=h);entry.focus_set()
-        def save(e=None):
-            if self.busy:return
-            value=entry.get()
-            def done(_):entry.destroy();self.refresh()
-            self.run(lambda:self.c.update(rid,comment=value),done)
-        entry.bind('<Return>',save);entry.bind('<Escape>',lambda e:entry.destroy())
 
     def create_dialog(self,kind,quotes=None):
         if self.busy:return
@@ -200,16 +281,18 @@ class App:
         widget.pack(side='right',fill='x',expand=True)
         return widget
 
-    def card(self,rid):
+    def card(self,rid,focus=None):
         if self.busy:return
         def work():
             return self.c.get(rid),self.c.rows('quote'),self.c.details(rid)
         def done(data):
             r,quotes,details=data
-            w=tk.Toplevel(self.w);w.title(f"Карточка №{r['num']:05d}");w.geometry('850x730');w.transient(self.w)
+            w=tk.Toplevel(self.w);w.title(f"Карточка №{r['num']:05d}");w.geometry('900x830');w.configure(bg=BG);w.transient(self.w)
             vars={k:tk.StringVar(value='' if r[k] is None else str(r[k])) for k in ['manager','status','comment','amount','close_month']}
             ttk.Label(w,text=f"Создана: {r['created']}    Год закрытия: {r['close_year'] or '—'}").pack(pady=4)
+            if r['close_month'] is not None:vars['close_month'].set(MONTHS[r['close_month']-1])
             man=self.field(w,'Менеджер',vars['manager'],MANAGERS)
+            if focus=='manager':man.focus_set()
             if r['kind']=='quote':man.configure(state='disabled')
             self.field(w,'Статус',vars['status'],[CLOSED] if r['status']==CLOSED else STATUSES)
             self.field(w,'Комментарий',vars['comment'])
@@ -228,18 +311,19 @@ class App:
                         note.set('Менеджер подставлен из просчёта. Можно изменить вручную.')
                 combo.bind('<<ComboboxSelected>>',picked)
                 note=tk.StringVar();ttk.Label(w,textvariable=note,foreground='#174ea6').pack()
-                self.field(w,'Общая сумма, ₽ (для расчёта)',vars['amount'])
-                self.field(w,'Месяц закрытия',vars['close_month'],['',*map(str,range(1,13))] if r['status']!=CLOSED else list(map(str,range(1,13))))
+                amount_entry=self.field(w,'Общая сумма, ₽ (для расчёта)',vars['amount'])
+                if focus=='amount':amount_entry.focus_set();amount_entry.selection_range(0,'end')
+                self.field(w,'Месяц закрытия',vars['close_month'],['',*MONTHS] if r['status']!=CLOSED else MONTHS)
                 ttk.Label(w,text=f"Мой бонус: {earnings(r['amount']) if r['amount'] is not None else '—'} ₽; ставка 3%").pack()
             pathbox=tk.Text(w,height=7,wrap='word');pathbox.pack(fill='x',padx=8,pady=5);pathbox.insert('1.0',details+'\n'+r['folder_error']);pathbox.configure(state='disabled')
             def saved(_):
                 w.destroy()
-                if self.tabs.index('current')==2:self.report()
-                else:self.refresh()
+                self.pending_report=self.tabs.index('current')==2
+                self.refresh()
             def save():
                 if self.busy:return
                 fields={k:v.get() for k,v in vars.items() if r['kind']=='order' or k in ('status','comment')}
-                if r['kind']=='order':fields['month']=fields.pop('close_month');fields['quote_id']=choices[qvar.get()]
+                if r['kind']=='order':fields['month']=month_number(fields.pop('close_month'));fields['quote_id']=choices[qvar.get()]
                 self.run(lambda:self.c.update(rid,**fields),saved)
             ttk.Button(w,text='Сохранить',command=save).pack(pady=5)
             bar=ttk.Frame(w);bar.pack(fill='x',padx=5)
@@ -270,40 +354,81 @@ class App:
         self.run(work,done)
 
     def build_report(self):
-        frame=ttk.Frame(self.tabs,padding=8);self.tabs.add(frame,text='История заработка')
+        frame=ttk.Frame(self.tabs,padding=(0,6));self.tabs.add(frame,text='Отчётность')
+        ttk.Label(frame,text='Отчётность',font=('Segoe UI',20,'bold')).pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,text='История заработка по завершённым заявкам',foreground=MUTED).pack(anchor='w',pady=(0,20))
         bar=ttk.Frame(frame);bar.pack(fill='x')
-        self.year=tk.StringVar(value=str(date.today().year));self.month=tk.StringVar(value=str(date.today().month))
-        ttk.Label(bar,text='Год').pack(side='left');ttk.Entry(bar,textvariable=self.year,width=6).pack(side='left')
-        ttk.Label(bar,text='Месяц').pack(side='left');ttk.Combobox(bar,textvariable=self.month,values=list(map(str,range(1,13))),width=5,state='readonly').pack(side='left')
-        ttk.Button(bar,text='Показать месяц',command=self.report).pack(side='left',padx=5)
-        ttk.Button(bar,text='Журнал изменений',command=self.show_history).pack(side='left')
-        self.period_list=ttk.Combobox(bar,state='readonly',width=12);self.period_list.pack(side='right');self.period_list.bind('<<ComboboxSelected>>',self.pick_period)
-        ttk.Label(bar,text='Сохранённые месяцы:').pack(side='right')
-        self.total=tk.StringVar();ttk.Label(frame,textvariable=self.total,font=('Segoe UI',14)).pack(anchor='w',pady=10)
-        cols=('num','manager','amount','rate','bonus','comment')
-        self.report_table=ttk.Treeview(frame,columns=cols,show='headings')
-        for c,label in zip(cols,['Заявка','Менеджер','Общая сумма, ₽','Ставка','Мой заработок, ₽','Комментарий']):self.report_table.heading(c,text=label)
+        self.year=tk.StringVar(value=str(date.today().year));self.month=tk.StringVar(value=MONTHS[date.today().month-1])
+        ttk.Label(bar,text='Год').pack(side='left',padx=(0,8));ttk.Entry(bar,textvariable=self.year,width=6).pack(side='left')
+        ttk.Label(bar,text='Месяц').pack(side='left',padx=(20,8))
+        combo=ttk.Combobox(bar,textvariable=self.month,values=MONTHS,width=15,state='readonly');combo.pack(side='left')
+        combo.bind('<<ComboboxSelected>>',lambda e:self.report())
+        ttk.Button(bar,text='Показать',style='Primary.TButton',command=self.report).pack(side='left',padx=12)
+        ttk.Button(bar,text='Журнал изменений',command=self.show_history).pack(side='right')
+        self.period_list=ttk.Combobox(bar,state='readonly',width=20);self.period_list.pack(side='right',padx=15);self.period_list.bind('<<ComboboxSelected>>',self.pick_period)
+        self.period_choices={}
+        self.total=tk.StringVar(value='Выберите месяц')
+        tk.Label(frame,textvariable=self.total,font=('Segoe UI',22,'bold'),bg='#e7fbee',fg='#087e30',anchor='w',padx=22,pady=22).pack(fill='x',pady=20)
+        cols=[('num','Заявка',100),('manager','Менеджер',210),('amount','Общая сумма',160),
+              ('rate','Ставка',90),('bonus','Мой заработок',175),('comment','Комментарий',260),('actions','Действия',140)]
+        self.report_table=RecordTable(frame,cols,self.report_action,can_edit=lambda:not self.busy)
         self.report_table.pack(fill='both',expand=True)
-        self.report_table.bind('<Double-1>',lambda e:self.card(self.report_table.selection()[0]) if self.report_table.selection() else None)
-        ttk.Label(frame,text='Двойной щелчок — карточка заявки и доступ к обеим папкам. Отчёт учитывает исправления сумм и месяца.').pack()
-        self.tabs.bind('<<NotebookTabChanged>>',lambda e:self.report() if self.tabs.index('current')==2 else None)
+        actions=ttk.Frame(frame);actions.pack(fill='x',pady=12)
+        def card():
+            selected=self.report_table.selection()
+            if selected:self.card(selected[0])
+        ttk.Button(actions,text='Открыть карточку и папки',command=card).pack(side='left')
+        ttk.Label(actions,text='Итог учитывает исправления суммы и месяца',foreground=MUTED).pack(side='right')
+
+    def report_action(self,action,r,event):
+        if action=='refresh':self.report();return
+        if action=='comment':
+            if self.busy:return
+            def saved(_):
+                self.report_table.cancel_edit();self.pending_refresh=True;self.report()
+            self.run(lambda:self.c.update(r['id'],comment=event),saved)
+        else:self.table_action('order',action,r,event)
 
     def pick_period(self,e=None):
-        value=self.period_list.get()
-        if value:
-            y,m=value.split('-');self.year.set(y);self.month.set(str(int(m)));self.report()
+        period=self.period_choices.get(self.period_list.get())
+        if period:
+            y,m=period;self.year.set(str(y));self.month.set(MONTHS[m-1]);self.report()
 
     def report(self):
-        y,m=self.year.get(),self.month.get()
+        if self.busy:self.pending_report=True;return
+        if self.report_table.editor:
+            self.notice.set('Enter — сохранить комментарий, Esc — отменить.');return
+        y=self.year.get();m=month_number(self.month.get())
         def work():
-            if not y.isdigit() or not m.isdigit() or not 1<=int(m)<=12:raise CabinetError('Укажите год и месяц.')
-            return self.c.report(int(y),int(m)),self.c.periods()
+            if not y.isdigit() or not 1<=int(y)<=9999 or m is None:raise CabinetError('Укажите год и месяц.')
+            return self.c.report(int(y),m),self.c.periods()
         def done(data):
-            (rows,total),periods=data;self.report_table.delete(*self.report_table.get_children())
-            for r in rows:self.report_table.insert('','end',iid=r['id'],values=(f"№{r['num']:05d}",r['manager'],r['amount'],'3%',r['earnings'],r['comment']))
-            self.total.set(f'{m.zfill(2)}.{y}: заработано {total:,} ₽ · заявок {len(rows)}'.replace(',',' '))
-            self.period_list['values']=[f'{y}-{m:02d}' for y,m in periods]
+            (rows,total),periods=data
+            for r in rows:
+                r['_related_id']=r['quote_id']
+                r['_cells']={'num':f"{r['num']:05d}",'manager':r['manager'],'amount':rub(r['amount']),
+                    'rate':'3%','bonus':rub(r['earnings']),'comment':r['comment']}
+            self.report_table.set_rows(rows)
+            self.total.set(f'{MONTHS[m-1]} {y}   •   {rub(total)}   •   Заявок: {len(rows)}')
+            self.period_choices={f'{MONTHS[month-1]} {year}':(year,month) for year,month in periods}
+            self.period_list['values']=list(self.period_choices)
+            self.period_list.set(f'{MONTHS[m-1]} {y}' if (int(y),m) in periods else '')
         self.run(work,done)
+
+    def build_settings(self):
+        frame=ttk.Frame(self.tabs,padding=(0,8));self.tabs.add(frame,text='Настройки')
+        ttk.Label(frame,text='Настройки',font=('Segoe UI',20,'bold')).pack(anchor='w',pady=(0,10))
+        ttk.Label(frame,text='Папки кабинета',font=('Segoe UI',13,'bold')).pack(anchor='w',pady=12)
+        for label,path in [('Общая папка',self.c.root),('Данные',self.c.db_path.parent),('Заявки',self.c.root/'Заявки'),('Просчёты',self.c.root/'Просчеты'),('Резервные копии',self.c.root/'Резервные копии')]:
+            row=ttk.Frame(frame,padding=(0,6));row.pack(fill='x')
+            ttk.Label(row,text=label,width=22).pack(side='left')
+            entry=ttk.Entry(row);entry.insert(0,str(path));entry.configure(state='readonly')
+            entry.pack(side='left',fill='x',expand=True,padx=12)
+            ttk.Button(row,text='Открыть папку',command=lambda p=path:self.run(lambda:open_folder(p))).pack(side='right')
+        ttk.Label(frame,text='Резервные копии',font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(28,12))
+        ttk.Label(frame,text='Каждые 7 дней • Хранятся 3 полные копии базы и файлов.\nЕсли кабинет закрыт, проверка выполняется при следующем запуске.').pack(anchor='w',pady=8)
+        ttk.Button(frame,text='Создать копию сейчас',style='Primary.TButton',command=lambda:self.run(lambda:self.c.backup(True),lambda p:messagebox.showinfo('Копия создана',p))).pack(anchor='w',pady=10)
+        ttk.Label(frame,text='Другая база: запуск с --choose-root. Восстановление: запуск с --restore.\nПодробный порядок — в READ_ME.md рядом с программой.',foreground=MUTED).pack(anchor='w',pady=18)
 
     def show_history(self,rid=None):
         def done(rows):
@@ -337,6 +462,7 @@ class App:
     def quit(self):
         if self.busy:
             messagebox.showinfo('Операция выполняется','Дождитесь завершения операции перед выходом.');return
+        for timer in self.w.tk.call('after','info'):self.w.after_cancel(timer)
         self.pool.shutdown(wait=False);self.c.close();self.w.destroy()
 
 
