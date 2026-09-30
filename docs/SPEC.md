@@ -285,5 +285,3 @@ SQLite-база должна находиться отдельно от папк
 Подготовлены документы проекта и начальная автоматическая проверка. Эта версия — снимок рабочего ТЗ для разработки; до явного объявления переноса основным остаётся ранее созданный документ ТЗ. Windows-сборка будет добавлена после фиксации стека и появления исходников.
 
 Справочные источники: https://learn.chatgpt.com/docs/cloud ; https://learn.chatgpt.com/docs/codex/ide ; https://docs.github.com/en/actions/get-started/understand-github-actions ; https://v2.tauri.app/distribute/pipelines/github/ .
-
-
