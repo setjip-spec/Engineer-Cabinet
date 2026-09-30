@@ -181,12 +181,12 @@ class App:
             data['all']=self.c.rows('order')
             return data
         def done(data):
-            all_orders={r['id']:r for r in data['all']}
+            order_by_quote={r['quote_id']:r['id'] for r in data['all'] if r['quote_id']}
             for kind in self.tables:
                 rows=data[kind];self.cache[kind]['rows']={r['id']:r for r in rows}
                 for r in rows:
                     rel=r['quote_num'] if kind=='order' else r['order_num']
-                    r['_related_id']=r['quote_id'] if kind=='order' else next((o['id'] for o in all_orders.values() if o['quote_id']==r['id']),None)
+                    r['_related_id']=r['quote_id'] if kind=='order' else order_by_quote.get(r['id'])
                     r['_cells']={'num':f"{r['num']:05d}",'related':f'{rel:05d}' if rel is not None else '—',
                         'created':date.fromisoformat(r['created']).strftime('%d.%m.%Y'),'manager':r['manager'],
                         'earnings':rub(r['earnings']),'comment':r['comment']}
