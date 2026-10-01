@@ -7,7 +7,7 @@ import tkinter as tk
 import time
 from engineer_cabinet.core import Cabinet, MANAGERS
 from engineer_cabinet.ui import App
-from PIL import Image
+from PIL import Image, ImageGrab
 import ctypes
 from ctypes import wintypes
 ctypes.windll.user32.PrintWindow.argtypes=(wintypes.HWND,wintypes.HDC,wintypes.UINT)
@@ -43,6 +43,9 @@ with tempfile.TemporaryDirectory() as tmp:
     def capture(window,name):
         hwnd=win32gui.GetParent(window.winfo_id())
         left,top,right,bottom=win32gui.GetWindowRect(hwnd);width=right-left;height=bottom-top
+        if window is not root:
+            ImageGrab.grab(bbox=(left,top,right,bottom)).save(out/(name+'.png'))
+            return
         dc=win32gui.GetWindowDC(hwnd);source=win32ui.CreateDCFromHandle(dc);memory=source.CreateCompatibleDC()
         bitmap=win32ui.CreateBitmap();bitmap.CreateCompatibleBitmap(source,width,height);memory.SelectObject(bitmap)
         result=ctypes.windll.user32.PrintWindow(hwnd,memory.GetSafeHdc(),2)

@@ -76,6 +76,7 @@ class Version11WindowsTests(unittest.TestCase):
         self.app.create_dialog('order');self.pump();w=self.window('Новая заявка')
         combos=[x for x in self.descendants(w) if isinstance(x,ttk.Combobox)]
         manager,quotes=combos
+        self.assertEqual(manager.get(),MANAGERS[0])
         self.assertEqual(len(quotes['values']),2)
         self.assertIn(MANAGERS[0],quotes['values'][1]);self.assertNotIn(MANAGERS[1],quotes['values'][1])
         self.assertIn(self.c.today().strftime('%d.%m.%Y'),quotes['values'][1])
