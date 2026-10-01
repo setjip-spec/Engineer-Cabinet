@@ -54,7 +54,7 @@ class App:
         style.configure('Selected.Nav.TButton',background='#dcecff',foreground=BLUE)
         style.configure('TEntry',padding=9,fieldbackground='white',bordercolor=LINE)
         style.configure('TCombobox',padding=8,fieldbackground='white',background='white',bordercolor=LINE,arrowsize=15)
-        style.map('TCombobox',fieldbackground=[('readonly','white')],selectbackground=[('readonly','white')],selectforeground=[('readonly',INK)])
+        style.map('TCombobox',foreground=[('disabled',MUTED),('readonly',INK)],fieldbackground=[('readonly','white')],selectbackground=[('readonly','white')],selectforeground=[('readonly',INK)])
         style.configure('Treeview',rowheight=44,background='white',fieldbackground='white',bordercolor=LINE)
         style.configure('Treeview.Heading',padding=10,background='#eff4fb',foreground=INK)
         style.map('Treeview',background=[('selected','#dcecff')],foreground=[('selected',INK)])

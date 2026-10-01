@@ -77,6 +77,8 @@ class Version11WindowsTests(unittest.TestCase):
         combos=[x for x in self.descendants(w) if isinstance(x,ttk.Combobox)]
         manager,quotes=combos
         self.assertEqual(manager.get(),MANAGERS[0])
+        from engineer_cabinet.widgets import INK
+        self.assertEqual(ttk.Style(self.root).lookup('TCombobox','foreground',('readonly','focus')),INK)
         self.assertEqual(len(quotes['values']),2)
         self.assertIn(MANAGERS[0],quotes['values'][1]);self.assertNotIn(MANAGERS[1],quotes['values'][1])
         self.assertIn(self.c.today().strftime('%d.%m.%Y'),quotes['values'][1])
