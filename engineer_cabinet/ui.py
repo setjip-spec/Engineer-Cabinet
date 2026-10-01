@@ -10,8 +10,10 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from . import __version__
+from .dialogs import Dialog
 from .core import Cabinet, CabinetError, MANAGERS, STATUSES, CLOSED, earnings
-from .widgets import RecordTable, BG, INK, BLUE, MUTED, LINE, MONTHS, rub, month_number
+from .widgets import RecordTable, BG, INK, BLUE, MUTED, LINE, MONTHS, STATUS_COLORS, rub, month_number
 
 
 def open_folder(path):
@@ -28,12 +30,16 @@ def open_folder(path):
 class App:
     def __init__(self, window, cabinet):
         self.w=window;self.c=cabinet
-        self.w.title('Личный кабинет инженера')
-        self.w.geometry('1440x940');self.w.minsize(1080,680);self.w.configure(bg=BG)
+        self.w.title(f'Личный кабинет инженера — {__version__}')
+        self.w.geometry('1440x940');self.w.minsize(1000,620);self.w.configure(bg=BG)
+        if sys.platform=='win32':self.w.state('zoomed')
+        else:
+            try:self.w.attributes('-zoomed',True)
+            except tk.TclError:pass
         self.pool=ThreadPoolExecutor(max_workers=1)
         self.results=queue.Queue();self.busy=False;self.tables={};self.filters={};self.cache={}
         self.pending_refresh=False;self.pending_report=False;self.search_job=None
-        self.notice=tk.StringVar(value='Готово');self.stats=[];self.current_page=0
+        self.notice=tk.StringVar(value='Готово');self.stats=[];self.ready_bonuses=[];self.current_page=0
         style=ttk.Style(window);style.theme_use('clam')
         style.configure('.',font=('Segoe UI',11),background=BG,foreground=INK)
         style.configure('TFrame',background=BG)
@@ -42,11 +48,13 @@ class App:
         style.map('TButton',background=[('active','#eaf2ff')])
         style.configure('Primary.TButton',background=BLUE,foreground='white',bordercolor=BLUE)
         style.map('Primary.TButton',background=[('active','#0057e0')],foreground=[('active','white')])
+        style.configure('Danger.TButton',foreground='#b42318',bordercolor='#f2c6c2',background='#fff4f2')
+        style.map('Danger.TButton',background=[('active','#ffe2df')])
         style.configure('Nav.TButton',background=BG,foreground=MUTED,borderwidth=0,font=('Segoe UI',12,'bold'),padding=(20,12))
         style.configure('Selected.Nav.TButton',background='#dcecff',foreground=BLUE)
         style.configure('TEntry',padding=9,fieldbackground='white',bordercolor=LINE)
         style.configure('TCombobox',padding=8,fieldbackground='white',background='white',bordercolor=LINE,arrowsize=15)
-        style.map('TCombobox',fieldbackground=[('readonly','white')],selectbackground=[('readonly','white')],selectforeground=[('readonly',INK)])
+        style.map('TCombobox',foreground=[('disabled',MUTED),('readonly',INK)],fieldbackground=[('readonly','white')],selectbackground=[('readonly','white')],selectforeground=[('readonly',INK)])
         style.configure('Treeview',rowheight=44,background='white',fieldbackground='white',bordercolor=LINE)
         style.configure('Treeview.Heading',padding=10,background='#eff4fb',foreground=INK)
         style.map('Treeview',background=[('selected','#dcecff')],foreground=[('selected',INK)])
@@ -64,7 +72,7 @@ class App:
         self.build_report();self.build_settings()
         footer=ttk.Frame(window,padding=(22,10));footer.pack(fill='x')
         ttk.Label(footer,textvariable=self.notice,foreground=MUTED).pack(side='left')
-        ttk.Label(footer,text='Локальная база • 3%',foreground=MUTED).pack(side='right')
+        ttk.Label(footer,text=f'Версия {__version__} • Локальная база • 3%',foreground=MUTED).pack(side='right')
         self.tabs.bind('<<NotebookTabChanged>>',self.page_changed)
         self.w.after(50,self.drain);self.w.protocol('WM_DELETE_WINDOW',self.quit)
         self.navigate(0);self.refresh();self.w.after(2500,self.scheduled_backup)
@@ -87,7 +95,7 @@ class App:
         self.search_job=self.w.after(200,self.refresh)
 
     def reset_filters(self,kind):
-        for var,value in zip(self.filters[kind],('Все','Все менеджеры','','Все','Все статусы')):var.set(value)
+        for var,value in zip(self.filters[kind],('Все','Все менеджеры','','Все','Все статусы','')):var.set(value)
         self.refresh()
 
     def run(self, work, done=None, quiet=False):
@@ -127,25 +135,28 @@ class App:
         bar=ttk.Frame(frame);bar.pack(fill='x',pady=(4,18))
         group=tk.StringVar(value='Все');manager=tk.StringVar(value='Все менеджеры')
         suffix=tk.StringVar();link=tk.StringVar(value='Все');status=tk.StringVar(value='Все статусы')
-        self.filters[kind]=(group,manager,suffix,link,status)
+        comment=tk.StringVar();self.filters[kind]=(group,manager,suffix,link,status,comment)
         groups=['Все','Активные','Готовые']+(['Завершённые'] if kind=='order' else ['С заявкой','Без заявки'])
-        for i,(label,var,values) in enumerate((('Поиск по номеру',suffix,None),('Менеджер',manager,['Все менеджеры',*sorted(MANAGERS)]),
+        for i,(label,var,values) in enumerate((('Поиск по номеру',suffix,None),('Поиск по комментарию',comment,None),('Менеджер',manager,['Все менеджеры',*sorted(MANAGERS)]),
                 ('Статус',status,['Все статусы',*STATUSES]+([CLOSED] if kind=='order' else [])),('Показать',group,groups))):
-            cell=ttk.Frame(bar);cell.grid(row=0,column=i,sticky='ew',padx=(0,16));bar.columnconfigure(i,weight=1)
+            cell=ttk.Frame(bar);cell.grid(row=0,column=i,sticky='ew',padx=(0,12));bar.columnconfigure(i,weight=1,uniform='filters')
             ttk.Label(cell,text=label).pack(anchor='w',pady=(0,7))
-            widget=ttk.Entry(cell,textvariable=var,width=20) if values is None else ttk.Combobox(cell,textvariable=var,values=values,state='readonly',width=22)
+            widget=ttk.Entry(cell,textvariable=var,width=12) if values is None else ttk.Combobox(cell,textvariable=var,values=values,state='readonly',width=16)
             widget.pack(fill='x');widget.bind('<<ComboboxSelected>>',self.changed_filter)
             if values is None:var.trace_add('write',lambda *a:self.changed_filter())
-        ttk.Button(bar,text='⟳  Сбросить фильтры',command=lambda:self.reset_filters(kind)).grid(row=0,column=4,sticky='s')
+        ttk.Button(bar,text='⟳  Сбросить фильтры',command=lambda:self.reset_filters(kind)).grid(row=0,column=5,sticky='s')
         stats=ttk.Frame(frame);stats.pack(fill='x',pady=(0,18));stats.columnconfigure(0,weight=1);stats.columnconfigure(1,weight=1)
         bonusbox=tk.Frame(stats,bg='#e7fbee',highlightthickness=1,highlightbackground='#b8efd0')
         bonusbox.grid(row=0,column=0,sticky='nsew',padx=(0,16))
-        coins=tk.Canvas(bonusbox,width=76,height=90,bg='#e7fbee',highlightthickness=0);coins.pack(side='left',padx=16)
-        for x,top,bottom in ((12,43,72),(40,22,60)):
-            for y in range(bottom,top-1,-7):coins.create_oval(x,y,x+27,y+12,fill='#e7fbee',outline='#087e30',width=3)
-        body=tk.Frame(bonusbox,bg='#e7fbee');body.pack(side='left',pady=16)
-        tk.Label(body,text='Активные бонусы (3%)',bg='#e7fbee',fg='#087e30',font=('Segoe UI',12)).pack(anchor='w')
-        bonus=tk.StringVar(value='—');tk.Label(body,textvariable=bonus,bg='#e7fbee',fg='#087e30',font=('Segoe UI',26,'bold')).pack(anchor='w',pady=(3,0))
+        tk.Label(bonusbox,text='Бонусы · 3%',bg='#e7fbee',fg='#087e30',font=('Segoe UI',11,'bold')).pack(anchor='w',padx=18,pady=(10,0))
+        body=tk.Frame(bonusbox,bg='#e7fbee');body.pack(fill='both',expand=True,padx=16,pady=(6,12))
+        bonus=tk.StringVar(value='—');ready_bonus=tk.StringVar(value='—');self.ready_bonuses.append(ready_bonus)
+        for i,(label,var) in enumerate((('Активные',bonus),('Готовые',ready_bonus))):
+            box=tk.Frame(body,bg='#e7fbee');box.grid(row=0,column=i*2,sticky='nsew',padx=8)
+            body.columnconfigure(i*2,weight=1,uniform='bonuses')
+            tk.Label(box,text=label,bg='#e7fbee',fg='#087e30',font=('Segoe UI',12)).pack(anchor='w')
+            tk.Label(box,textvariable=var,bg='#e7fbee',fg='#087e30',font=('Segoe UI',25,'bold')).pack(anchor='w',pady=(3,0))
+        tk.Frame(body,bg='#b8e8c9',width=1).grid(row=0,column=1,sticky='ns',padx=14)
         panel=tk.Frame(stats,bg='white',highlightthickness=1,highlightbackground=LINE);panel.grid(row=0,column=1,sticky='nsew')
         tk.Label(panel,text='Статистика активных заявок',font=('Segoe UI',10,'bold'),bg='white',fg=INK).pack(anchor='w',padx=16,pady=(10,5))
         cards=tk.Frame(panel,bg='white');cards.pack(fill='both',expand=True,padx=10,pady=(0,10))
@@ -154,7 +165,7 @@ class App:
             box=tk.Frame(cards,bg=bg);box.pack(side='left',fill='both',expand=True,padx=5)
             tk.Label(box,text=label,bg=bg,fg=fg,font=('Segoe UI',10)).pack(padx=12,pady=(6,0))
             v=tk.StringVar(value='0');tk.Label(box,textvariable=v,bg=bg,fg=fg,font=('Segoe UI',20,'bold')).pack(pady=(0,5));counters[status]=v
-        ttk.Label(frame,text='Активные: создано, в работе, пауза. Общие показатели не зависят от фильтров.',foreground=MUTED).pack(anchor='w',pady=(0,10))
+        ttk.Label(frame,text='Бонусы по заявкам: активные и готовые отдельно. Завершённые — в отчётности. Показатели не зависят от фильтров.',foreground=MUTED).pack(anchor='w',pady=(0,10))
         self.stats.append((bonus,counters))
         cols=[('num','№ заявки' if kind=='order' else '№ просчёта',100 if kind=='order' else 125),('related','Просчёт' if kind=='order' else 'Заявка',90),
               ('created','Дата создания',135),('manager','Менеджер',190)]
@@ -173,10 +184,10 @@ class App:
         args={k:tuple(v.get() for v in self.filters[k]) for k in self.tables}
         def work():
             data={}
-            for k,(group,manager,suffix,link,status) in args.items():
+            for k,(group,manager,suffix,link,status,comment) in args.items():
                 if group in ('С заявкой','Без заявки'):
                     link='Со связью' if group=='С заявкой' else 'Без связи';group='Все'
-                rows=self.c.rows(k,group,'' if manager=='Все менеджеры' else manager,suffix,link)
+                rows=self.c.rows(k,group,'' if manager=='Все менеджеры' else manager,suffix,link,comment=comment)
                 data[k]=[r for r in rows if status=='Все статусы' or r['status']==status]
             data['all']=self.c.rows('order')
             return data
@@ -195,6 +206,8 @@ class App:
                 if kind=='quote':text+=f" · Без заявки: {sum(r['order_num'] is None for r in rows)}"
                 self.cache[kind]['count'].configure(text=text+'   •   Комментарий: Enter — сохранить, Esc — отменить')
             active=[r for r in data['all'] if r['status'] in STATUSES[:3]]
+            ready_total=sum(r['earnings'] or 0 for r in data['all'] if r['status']=='Готово')
+            for ready_bonus in self.ready_bonuses:ready_bonus.set(rub(ready_total))
             for bonus,counters in self.stats:
                 bonus.set(rub(sum(r['earnings'] or 0 for r in active)))
                 for status,var in counters.items():var.set(str(sum(r['status']==status for r in active)))
@@ -213,24 +226,80 @@ class App:
         elif action=='related_folder':
             def work():return open_folder(self.c.path(self.c.get(r['_related_id'])['folder']))
             self.run(work)
-        elif action in ('menu','status'):
-            menu=tk.Menu(self.w,tearoff=0,font=('Segoe UI',11),bg='white',fg=INK,activebackground='#e2f0ff',activeforeground=BLUE)
-            if action=='status':
-                if r['status']==CLOSED:menu.add_command(label='Изменить месяц закрытия…',command=lambda:self.card(rid))
-                else:
-                    for status in STATUSES:
-                        menu.add_command(label=status,command=lambda v=status:self.run(lambda:self.c.update(rid,status=v),lambda _:self.refresh()))
-                    if kind=='order':menu.add_separator();menu.add_command(label='Завершить — выбрать месяц…',command=lambda:self.card(rid))
-            else:
-                menu.add_command(label='Открыть карточку',command=lambda:self.card(rid))
-                if kind=='order':
-                    menu.add_command(label='Изменить сумму',command=lambda:self.card(rid,'amount'))
-                    menu.add_command(label='Изменить менеджера',command=lambda:self.card(rid,'manager'))
-                menu.add_separator()
-                menu.add_command(label='Открыть папку '+('заявки' if kind=='order' else 'просчёта'),command=lambda:self.table_action(kind,'folder',r,None))
-                menu.add_command(label='Открыть папку '+('просчёта' if kind=='order' else 'заявки'),state='normal' if r.get('_related_id') else 'disabled',command=lambda:self.table_action(kind,'related_folder',r,None))
+        elif action=='status':self.status_dialog(rid)
+        elif action=='menu':
+            menu=self.record_menu(kind,r)
             try:menu.tk_popup(event.x_root,event.y_root)
             finally:menu.grab_release()
+
+    def record_menu(self,kind,r):
+        rid=r['id']
+        menu=tk.Menu(self.w,tearoff=0,font=('Segoe UI',11),bg='white',fg=INK,activebackground='#e2f0ff',activeforeground=BLUE)
+        menu.add_command(label='Открыть карточку',command=lambda:self.card(rid))
+        if kind=='order':
+            menu.add_command(label='Изменить сумму',command=lambda:self.card(rid,'amount'))
+            menu.add_command(label='Изменить менеджера',command=lambda:self.card(rid,'manager'))
+        menu.add_separator()
+        menu.add_command(label='Открыть папку '+('заявки' if kind=='order' else 'просчёта'),command=lambda:self.table_action(kind,'folder',r,None))
+        menu.add_command(label='Открыть папку '+('просчёта' if kind=='order' else 'заявки'),state='normal' if r.get('_related_id') else 'disabled',command=lambda:self.table_action(kind,'related_folder',r,None))
+        menu.add_separator()
+        menu.add_command(label='Удалить запись и папку…',foreground='#b42318',state='disabled' if r['status']==CLOSED else 'normal',command=lambda:self.delete_dialog(rid))
+        return menu
+
+    def status_dialog(self,rid):
+        if self.busy:return
+        def loaded(r):
+            w=Dialog(self.w,f"Статус — №{r['num']:05d}")
+            ttk.Label(w.body,text='Выберите статус',font=('Segoe UI',18,'bold')).pack(anchor='w')
+            ttk.Label(w.body,text=f"№{r['num']:05d} • {r['manager']}",foreground=MUTED).pack(anchor='w',pady=(5,16))
+            options=ttk.Frame(w.body);options.pack(fill='both',expand=True)
+            descriptions={'Создан':'Новая запись','В работе':'Занимаюсь заданием','Пауза':'Ожидаю задание или данные','Готово':'Инженерная работа готова',CLOSED:'Заявка закрыта за месяц'}
+            statuses=[CLOSED] if r['status']==CLOSED else STATUSES
+            for i,status in enumerate(statuses):
+                bg,fg=STATUS_COLORS[status]
+                def choose(value=status):
+                    if self.busy:return
+                    self.run(lambda:self.c.update(rid,status=value),lambda _: (w.destroy(),self.refresh()))
+                button=tk.Button(options,text=('✓  ' if status==r['status'] else '●  ')+status+'\n'+descriptions[status],
+                    font=('Segoe UI',12),bg=bg,fg=fg,activebackground=bg,activeforeground=fg,
+                    relief='flat',bd=0,highlightthickness=2,highlightbackground=fg if status==r['status'] else bg,
+                    padx=16,pady=18,anchor='w',justify='left',cursor='hand2',command=choose,
+                    state='disabled' if status==CLOSED else 'normal')
+                button.grid(row=i//2,column=i%2,sticky='nsew',padx=5,pady=5)
+            options.columnconfigure(0,weight=1);options.columnconfigure(1,weight=1)
+            ttk.Button(w.footer,text='Отмена',command=w.destroy).pack(side='right')
+            if r['kind']=='order':
+                def closing():w.destroy();self.card(rid,'month')
+                ttk.Button(w.footer,text='Изменить месяц закрытия' if r['status']==CLOSED else 'Завершить — выбрать месяц',style='Primary.TButton',command=closing).pack(side='left')
+            w.show((660,350 if r['status']==CLOSED else 430))
+        self.run(lambda:self.c.get(rid),loaded)
+
+    def delete_dialog(self,rid):
+        if self.busy:return
+        def loaded(data):
+            r,details=data
+            if r['status']==CLOSED:
+                messagebox.showinfo('Удаление недоступно','Завершённую заявку нельзя удалить.',parent=self.w);return
+            w=Dialog(self.w,'Подтвердите удаление',scroll=True)
+            ttk.Label(w.body,text=f"Удалить {'заявку' if r['kind']=='order' else 'просчёт'} №{r['num']:05d}?",font=('Segoe UI',18,'bold'),foreground='#b42318').pack(anchor='w',pady=(0,12))
+            ttk.Label(w.body,text='Будут удалены запись и ВСЕ файлы её собственной папки.\nСвязанная запись и её папка сохранятся. Очистится только связь.',wraplength=650,justify='left').pack(anchor='w',pady=(0,14))
+            text=tk.Text(w.body,height=10,wrap='word',font=('Segoe UI',11),relief='flat',padx=12,pady=12)
+            text.pack(fill='both',expand=True);text.insert('1.0',details);text.configure(state='disabled')
+            cancel=ttk.Button(w.footer,text='Отмена',command=w.destroy);cancel.pack(side='right',padx=(12,0))
+            def confirm():
+                if self.busy:return
+                def deleted(ok):
+                    w.destroy()
+                    if ok:
+                        for window in self.w.winfo_children():
+                            if isinstance(window,tk.Toplevel) and getattr(window,'record_id',None)==rid:window.destroy()
+                        self.pending_report=self.tabs.index('current')==2;self.refresh()
+                    else:
+                        self.pending_refresh=True;self.card(rid)
+                self.run(lambda:self.c.delete(rid,True),deleted)
+            ttk.Button(w.footer,text='Удалить запись и файлы',style='Danger.TButton',command=confirm).pack(side='left')
+            w.show((760,440));w.grab_set();cancel.focus_set()
+        self.run(lambda:(self.c.get(rid),self.c.details(rid)),loaded)
 
     def selected(self,kind):
         selected=self.tables[kind].selection()
@@ -254,25 +323,34 @@ class App:
         if quotes is None:
             self.run(lambda:self.c.rows('quote'),lambda rows:self.create_dialog(kind,rows))
             return
-        w=tk.Toplevel(self.w);w.title('Новая заявка' if kind=='order' else 'Новый просчёт');w.transient(self.w)
+        w=Dialog(self.w,'Новая заявка' if kind=='order' else 'Новый просчёт',scroll=True)
         manager=tk.StringVar(value=MANAGERS[0]);num=tk.StringVar();quote=tk.StringVar(value='Без просчёта')
-        self.field(w,'Менеджер',manager,MANAGERS)
-        if kind=='order':self.field(w,'Номер заявки',num)
+        ttk.Label(w.body,text='Новая заявка' if kind=='order' else 'Новый просчёт',font=('Segoe UI',18,'bold')).pack(anchor='w',pady=(0,16))
+        manager_combo=self.field(w.body,'Менеджер',manager,MANAGERS)
+        if kind=='order':self.field(w.body,'Номер заявки',num)
         choices={'Без просчёта':None}
         if kind=='order':
-            for r in quotes:
-                if r['order_num'] is None:choices[f"№{r['num']:05d} — {r['manager']}"]=r['id']
-            self.field(w,'Просчёт (можно связать позже в карточке)',quote,list(choices))
-        ttk.Label(w,text='Сумма при создании пустая. Папки создаются автоматически.\nВсе просчёты доступны для связи в карточке.').pack(padx=10,pady=8)
+            quote_combo=self.field(w.body,'Просчёт выбранного менеджера',quote,[])
+            def update_quotes(*args):
+                choices.clear();choices['Без просчёта']=None
+                for r in quotes:
+                    if r['order_num'] is None and r['manager']==manager.get():
+                        label=f"№{r['num']:05d} — {date.fromisoformat(r['created']).strftime('%d.%m.%Y')} — {r['manager']}"
+                        choices[label]=r['id']
+                quote_combo.configure(values=list(choices))
+                if quote.get() not in choices:quote.set('Без просчёта')
+            manager.trace_add('write',update_quotes);update_quotes()
+        ttk.Label(w.body,text='Папки создаются автоматически.'+('\nСумма заполняется позже. Просчёт можно связать позже в карточке.' if kind=='order' else ''),foreground=MUTED).pack(anchor='w',pady=16)
         def create():
             if self.busy:return
-            # Capture Tk values on the UI thread.
             m,n,q=manager.get(),num.get(),choices[quote.get()]
             def done(r):
                 w.destroy();self.refresh()
-                if r['folder_state']=='error':messagebox.showwarning('Запись сохранена, папка не готова',r['folder_error']+'\nОткройте карточку → Повторить.')
+                if r['folder_state']=='error':messagebox.showwarning('Запись сохранена, папка не готова',r['folder_error']+'\nОткройте карточку → Повторить.',parent=self.w)
             self.run(lambda:self.c.create(kind,m,n,q),done)
-        ttk.Button(w,text='Создать',command=create).pack(pady=8)
+        ttk.Button(w.footer,text='Отмена',command=w.destroy).pack(side='right')
+        ttk.Button(w.footer,text='Создать',style='Primary.TButton',command=create).pack(side='right',padx=12)
+        w.show((920,410 if kind=='order' else 300));manager_combo.focus_set()
 
     def field(self,w,label,var,choices=None):
         f=ttk.Frame(w,padding=4);f.pack(fill='x')
@@ -287,35 +365,36 @@ class App:
             return self.c.get(rid),self.c.rows('quote'),self.c.details(rid)
         def done(data):
             r,quotes,details=data
-            w=tk.Toplevel(self.w);w.title(f"Карточка №{r['num']:05d}");w.geometry('900x830');w.configure(bg=BG);w.transient(self.w)
+            w=Dialog(self.w,f"Карточка №{r['num']:05d}",scroll=True);w.record_id=rid
+            body=w.body
             vars={k:tk.StringVar(value='' if r[k] is None else str(r[k])) for k in ['manager','status','comment','amount','close_month']}
-            ttk.Label(w,text=f"Создана: {r['created']}    Год закрытия: {r['close_year'] or '—'}").pack(pady=4)
+            ttk.Label(body,text=f"Создана: {r['created']}    Год закрытия: {r['close_year'] or '—'}").pack(pady=4)
             if r['close_month'] is not None:vars['close_month'].set(MONTHS[r['close_month']-1])
-            man=self.field(w,'Менеджер',vars['manager'],MANAGERS)
+            man=self.field(body,'Менеджер',vars['manager'],MANAGERS)
             if focus=='manager':man.focus_set()
             if r['kind']=='quote':man.configure(state='disabled')
-            self.field(w,'Статус',vars['status'],[CLOSED] if r['status']==CLOSED else STATUSES)
-            self.field(w,'Комментарий',vars['comment'])
+            self.field(body,'Статус',vars['status'],[CLOSED] if r['status']==CLOSED else STATUSES)
+            self.field(body,'Комментарий',vars['comment'])
             choices={'Без просчёта':None};selected='Без просчёта'
             qvar=tk.StringVar(value=selected)
             if r['kind']=='order':
                 for q in quotes:
                     if q['order_num'] is None or q['id']==r['quote_id']:
-                        label=f"№{q['num']:05d} — {q['manager']}";choices[label]=q['id']
+                        label=f"№{q['num']:05d} — {date.fromisoformat(q['created']).strftime('%d.%m.%Y')} — {q['manager']}";choices[label]=q['id']
                         if q['id']==r['quote_id']:selected=label
-                qvar.set(selected);combo=self.field(w,'Связанный просчёт',qvar,list(choices))
+                qvar.set(selected);combo=self.field(body,'Связанный просчёт',qvar,list(choices))
                 def picked(e):
                     qid=choices[qvar.get()]
                     if qid:
                         vars['manager'].set(next(q['manager'] for q in quotes if q['id']==qid))
                         note.set('Менеджер подставлен из просчёта. Можно изменить вручную.')
                 combo.bind('<<ComboboxSelected>>',picked)
-                note=tk.StringVar();ttk.Label(w,textvariable=note,foreground='#174ea6').pack()
-                amount_entry=self.field(w,'Общая сумма, ₽ (для расчёта)',vars['amount'])
+                note=tk.StringVar();ttk.Label(body,textvariable=note,foreground='#174ea6').pack()
+                amount_entry=self.field(body,'Общая сумма, ₽ (для расчёта)',vars['amount'])
                 if focus=='amount':amount_entry.focus_set();amount_entry.selection_range(0,'end')
-                self.field(w,'Месяц закрытия',vars['close_month'],['',*MONTHS] if r['status']!=CLOSED else MONTHS)
-                ttk.Label(w,text=f"Мой бонус: {earnings(r['amount']) if r['amount'] is not None else '—'} ₽; ставка 3%").pack()
-            pathbox=tk.Text(w,height=7,wrap='word');pathbox.pack(fill='x',padx=8,pady=5);pathbox.insert('1.0',details+'\n'+r['folder_error']);pathbox.configure(state='disabled')
+                month_combo=self.field(body,'Месяц закрытия',vars['close_month'],['',*MONTHS] if r['status']!=CLOSED else MONTHS)
+                ttk.Label(body,text=f"Мой бонус: {earnings(r['amount']) if r['amount'] is not None else '—'} ₽; ставка 3%").pack()
+            pathbox=tk.Text(body,height=7,wrap='word');pathbox.pack(fill='x',padx=8,pady=5);pathbox.insert('1.0',details+'\n'+r['folder_error']);pathbox.configure(state='disabled')
             def saved(_):
                 w.destroy()
                 self.pending_report=self.tabs.index('current')==2
@@ -325,8 +404,9 @@ class App:
                 fields={k:v.get() for k,v in vars.items() if r['kind']=='order' or k in ('status','comment')}
                 if r['kind']=='order':fields['month']=month_number(fields.pop('close_month'));fields['quote_id']=choices[qvar.get()]
                 self.run(lambda:self.c.update(rid,**fields),saved)
-            ttk.Button(w,text='Сохранить',command=save).pack(pady=5)
-            bar=ttk.Frame(w);bar.pack(fill='x',padx=5)
+            ttk.Button(w.footer,text='Закрыть',command=w.destroy).pack(side='right')
+            ttk.Button(w.footer,text='Сохранить',style='Primary.TButton',command=save).pack(side='right',padx=12)
+            bar=ttk.Frame(body);bar.pack(fill='x',padx=5)
             ttk.Button(bar,text='Папка записи',command=lambda:self.run(lambda:open_folder(self.c.path(r['folder'])))).pack(side='left')
             if r['quote_id']:
                 q=next((q for q in quotes if q['id']==r['quote_id']),None)
@@ -343,14 +423,13 @@ class App:
                     n=simpledialog.askstring('Номер','Новый пятизначный номер:',initialvalue=f"{r['num']:05d}",parent=w)
                     if n and messagebox.askyesno('Изменить номер и имя папки',details+f'\nНовый номер: {n}\nСодержимое папки сохраняется. Продолжить?',parent=w):
                         self.run(lambda:self.c.rename_order(rid,n,True),saved)
-                ttk.Button(w,text='Изменить номер заявки и переименовать папку',command=renumber).pack(pady=5)
-            def delete():
-                if messagebox.askyesno('Удалить запись и файлы',details+'\n\nБудут удалены запись и ВСЕ файлы её собственной папки. Связанная запись и её папка сохранятся. Удалить?',parent=w):
-                    def deleted(ok):
-                        if ok:saved(None)
-                        else:w.destroy();self.card(rid)
-                    self.run(lambda:self.c.delete(rid,True),deleted)
-            if r['status']!=CLOSED:ttk.Button(w,text='Удалить запись вместе с её папкой',command=delete).pack(pady=10)
+                ttk.Button(body,text='Изменить номер заявки и переименовать папку',command=renumber).pack(pady=5)
+            ttk.Button(w.footer,text='Удалить запись и папку…',style='Danger.TButton',
+                state='disabled' if r['status']==CLOSED else 'normal',command=lambda:self.delete_dialog(rid)).pack(side='left')
+            w.show((960,820))
+            if focus=='manager':man.focus_set()
+            elif focus=='amount' and r['kind']=='order':amount_entry.focus_set();amount_entry.selection_range(0,'end')
+            elif focus=='month' and r['kind']=='order':month_combo.focus_set()
         self.run(work,done)
 
     def build_report(self):
@@ -432,8 +511,9 @@ class App:
 
     def show_history(self,rid=None):
         def done(rows):
-            w=tk.Toplevel(self.w);w.title('Журнал изменений');w.geometry('1000x650')
-            text=tk.Text(w,wrap='word');text.pack(fill='both',expand=True)
+            w=Dialog(self.w,'Журнал изменений')
+            text=tk.Text(w.body,wrap='word');text.pack(fill='both',expand=True)
+            ttk.Button(w.footer,text='Закрыть',command=w.destroy).pack(side='right')
             for r in rows:
                 before=json.loads(r['before_json']) if r['before_json'] else {}
                 after=json.loads(r['after_json']) if r['after_json'] else {}
@@ -444,16 +524,8 @@ class App:
                 if before.get('amount')!=after.get('amount'):
                     text.insert('end',f"  Заработок 3%: {earnings(before.get('amount'))} → {earnings(after.get('amount'))} ₽\n")
                 text.insert('end','\n')
-            text.configure(state='disabled')
+            text.configure(state='disabled');w.show((1000,650))
         self.run(lambda:self.c.history(rid),done)
-
-    def settings(self):
-        w=tk.Toplevel(self.w);w.title('Папки и резервирование');w.geometry('820x350')
-        ttk.Label(w,text='Общая папка: '+str(self.c.root)+'\nБаза: '+str(self.c.db_path)+'\nПросчёты: '+str(self.c.root/'Просчеты')+'\nЗаявки: '+str(self.c.root/'Заявки')+'\nКопии: '+str(self.c.root/'Резервные копии'),wraplength=780,justify='left').pack(padx=10,pady=10)
-        ttk.Label(w,text='Полная копия базы и файлов каждые 7 дней при работающей программе.\nЕсли программа была закрыта — при следующем запуске. Хранятся максимум 3 копии.\nКопии на том же диске помогают при ошибке, но не при поломке самого диска.').pack(pady=5)
-        ttk.Button(w,text='Открыть общую папку',command=lambda:self.run(lambda:open_folder(self.c.root))).pack(pady=5)
-        ttk.Button(w,text='Создать копию сейчас',command=lambda:self.run(lambda:self.c.backup(True),lambda p:messagebox.showinfo('Копия создана',p))).pack(pady=5)
-        ttk.Label(w,text='Другая база выбирается при запуске с --choose-root.\nДля восстановления используйте запуск с --restore (описано в инструкции).').pack(pady=5)
 
     def scheduled_backup(self):
         if not self.busy:self.run(lambda:self.c.backup(),lambda p:self.notice.set('Резервная копия: '+p) if p else None,quiet=True)

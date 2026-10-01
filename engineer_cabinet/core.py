@@ -163,7 +163,7 @@ class Cabinet:
         if name not in MANAGERS:
             raise CabinetError('Выберите менеджера из списка.')
 
-    def rows(self, kind, group='Все', manager='', suffix='', link='Все'):
+    def rows(self, kind, group='Все', manager='', suffix='', link='Все', comment=''):
         with self.lock:
             result = []
             for row in self.db.execute('''SELECT r.*, q.num AS quote_num, q.folder AS quote_folder,
@@ -173,7 +173,9 @@ class Cabinet:
                 r = dict(row)
                 if manager and r['manager'] != manager:
                     continue
-                if suffix and not f"{r['num']:05d}".endswith(suffix.strip().removeprefix('№')):
+                if suffix and suffix.strip().removeprefix('№').strip() not in f"{r['num']:05d}":
+                    continue
+                if comment.strip().casefold() not in r['comment'].casefold():
                     continue
                 if group == 'Активные' and r['status'] not in STATUSES[:3]:
                     continue
