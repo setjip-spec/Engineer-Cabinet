@@ -30,10 +30,15 @@ with tempfile.TemporaryDirectory() as tmp:
     root=tk.Tk();app=App(root,c)
     root.geometry('1420x940+0+0')
     def pump():
-        for _ in range(100):
+        deadline=time.monotonic()+10
+        stable=None
+        while time.monotonic()<deadline:
             root.update();time.sleep(.02)
             if not app.busy and not app.pending_refresh and not app.pending_report:
-                root.update();time.sleep(.15);root.update();return
+                if stable is None:stable=time.monotonic()
+                if time.monotonic()-stable>=.2:return
+            else:stable=None
+        raise RuntimeError('UI did not settle')
     pump()
     def capture(window,name):
         hwnd=win32gui.GetParent(window.winfo_id())
@@ -45,16 +50,20 @@ with tempfile.TemporaryDirectory() as tmp:
         image=Image.frombuffer('RGB',(width,height),bitmap.GetBitmapBits(True),'raw','BGRX',0,1)
         image.save(out/(name+'.png'))
         win32gui.DeleteObject(bitmap.GetHandle());memory.DeleteDC();source.DeleteDC();win32gui.ReleaseDC(hwnd,dc)
-    for i,name in enumerate(('orders','quotes','report','settings')):
-        app.navigate(i)
-        if i==2:app.month.set('Январь');app.report()
-        pump();capture(root,name)
-    app.navigate(0);pump()
-    rid=c.rows('order')[0]['id']
-    c.create('quote',MANAGERS[0])
-    for action,name in ((lambda:app.create_dialog('order'),'create-order'),(lambda:app.card(rid),'card'),
-                        (lambda:app.status_dialog(rid),'status-picker'),(lambda:app.delete_dialog(rid),'delete-confirmation')):
-        action();pump()
-        w=next(w for w in root.winfo_children() if isinstance(w,tk.Toplevel))
-        capture(w,name);w.destroy()
-    app.quit()
+    try:
+        for i,name in enumerate(('orders','quotes','report','settings')):
+            app.navigate(i)
+            if i==2:app.month.set('Январь');app.report()
+            pump();capture(root,name)
+        app.navigate(0);pump()
+        rid=c.rows('order')[0]['id']
+        c.create('quote',MANAGERS[0])
+        for action,name in ((lambda:app.create_dialog('order'),'create-order'),(lambda:app.card(rid),'card'),
+                            (lambda:app.status_dialog(rid),'status-picker'),(lambda:app.delete_dialog(rid),'delete-confirmation')):
+            action();pump()
+            w=next(w for w in root.winfo_children() if isinstance(w,tk.Toplevel))
+            capture(w,name);w.destroy()
+    finally:
+        app.pool.shutdown(wait=True);c.close()
+        for timer in root.tk.call('after','info'):root.after_cancel(timer)
+        root.destroy()
