@@ -35,11 +35,8 @@ with tempfile.TemporaryDirectory() as tmp:
             if not app.busy and not app.pending_refresh and not app.pending_report:
                 root.update();time.sleep(.15);root.update();return
     pump()
-    for i,name in enumerate(('orders','quotes','report','settings')):
-        app.navigate(i)
-        if i==2:app.month.set('Январь');app.report()
-        pump()
-        hwnd=win32gui.GetParent(root.winfo_id())
+    def capture(window,name):
+        hwnd=win32gui.GetParent(window.winfo_id())
         left,top,right,bottom=win32gui.GetWindowRect(hwnd);width=right-left;height=bottom-top
         dc=win32gui.GetWindowDC(hwnd);source=win32ui.CreateDCFromHandle(dc);memory=source.CreateCompatibleDC()
         bitmap=win32ui.CreateBitmap();bitmap.CreateCompatibleBitmap(source,width,height);memory.SelectObject(bitmap)
@@ -48,4 +45,16 @@ with tempfile.TemporaryDirectory() as tmp:
         image=Image.frombuffer('RGB',(width,height),bitmap.GetBitmapBits(True),'raw','BGRX',0,1)
         image.save(out/(name+'.png'))
         win32gui.DeleteObject(bitmap.GetHandle());memory.DeleteDC();source.DeleteDC();win32gui.ReleaseDC(hwnd,dc)
+    for i,name in enumerate(('orders','quotes','report','settings')):
+        app.navigate(i)
+        if i==2:app.month.set('Январь');app.report()
+        pump();capture(root,name)
+    app.navigate(0);pump()
+    rid=c.rows('order')[0]['id']
+    c.create('quote',MANAGERS[0])
+    for action,name in ((lambda:app.create_dialog('order'),'create-order'),(lambda:app.card(rid),'card'),
+                        (lambda:app.status_dialog(rid),'status-picker'),(lambda:app.delete_dialog(rid),'delete-confirmation')):
+        action();pump()
+        w=next(w for w in root.winfo_children() if isinstance(w,tk.Toplevel))
+        capture(w,name);w.destroy()
     app.quit()

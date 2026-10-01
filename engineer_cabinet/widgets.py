@@ -118,7 +118,8 @@ class RecordTable(ttk.Frame):
                     bg,fg=STATUS_COLORS.get(r['status'],STATUS_COLORS['Создан'])
                     roundrect(c,x+10,y+9,x+size-10,y+self.rh-9,14,fill=bg,outline='')
                     c.create_oval(x+20,y+self.rh/2-4,x+28,y+self.rh/2+4,fill=fg,outline='')
-                    c.create_text(x+36,y+self.rh/2,anchor='w',text=self.clip(r['status'],size-48),fill=fg,font=self.font)
+                    c.create_text(x+36,y+self.rh/2,anchor='w',text=self.clip(r['status'],size-65),fill=fg,font=self.font)
+                    c.create_text(x+size-23,y+self.rh/2,text='⌄',fill=fg,font=self.bold)
                 elif key=='actions':
                     for j,action in enumerate(('folder','related_folder','menu')):
                         left=x+12+j*40
