@@ -117,7 +117,7 @@ class App:
 
     def filter_snapshot(self):
         state={}
-        for kind,(group,manager,suffix,link,comment) in self.filters.items():
+        for kind,(group,manager,suffix,link,status_text,comment) in self.filters.items():
             state[kind]={
                 'group':group.get(),'manager':manager.get(),'suffix':suffix.get(),
                 'link':link.get(),'comment':comment.get(),
@@ -129,7 +129,7 @@ class App:
         self.c.set_preference('filters_v1',self.filter_snapshot())
 
     def reset_filters(self,kind):
-        group,manager,suffix,link,comment=self.filters[kind]
+        group,manager,suffix,link,status_text,comment=self.filters[kind]
         group.set('Все');manager.set('Все менеджеры');suffix.set('');link.set('Все');comment.set('')
         for var in self.status_filters[kind]['vars'].values():var.set(True)
         self.status_filter_changed(kind,False)
@@ -176,12 +176,13 @@ class App:
         manager_value=saved.get('manager','Все менеджеры');manager_value=manager_value if manager_value in ['Все менеджеры',*MANAGERS] else 'Все менеджеры'
         group=tk.StringVar(value=group_value);manager=tk.StringVar(value=manager_value)
         suffix=tk.StringVar(value=str(saved.get('suffix','') or ''));link=tk.StringVar(value='Все')
-        comment=tk.StringVar(value=str(saved.get('comment','') or ''));self.filters[kind]=(group,manager,suffix,link,comment)
+        comment=tk.StringVar(value=str(saved.get('comment','') or ''))
         status_choices=[*STATUSES]+([CLOSED] if kind=='order' else [])
         saved_statuses=saved.get('statuses',status_choices)
         if not isinstance(saved_statuses,list):saved_statuses=status_choices
         status_vars={s:tk.BooleanVar(value=s in saved_statuses) for s in status_choices}
         status_label=tk.StringVar(value='Все статусы')
+        self.filters[kind]=(group,manager,suffix,link,status_label,comment)
         self.status_filters[kind]={'choices':status_choices,'vars':status_vars,'label':status_label}
         for i,(label,var,values) in enumerate((('Поиск по номеру',suffix,None),('Поиск по комментарию',comment,None),('Менеджер',manager,['Все менеджеры',*sorted(MANAGERS)]),
                 ('Статус',None,None),('Показать',group,groups))):
@@ -239,12 +240,18 @@ class App:
         if self.busy:self.pending_refresh=True;return
         if any(t.editor for t in self.tables.values()):
             self.notice.set('Enter — сохранить комментарий, Esc — отменить.');return
+        selected_statuses={}
+        for k in self.tables:
+            status_text=self.filters[k][4].get()
+            choices=self.status_filters[k]['choices']
+            if status_text in choices:
+                for s,v in self.status_filters[k]['vars'].items():v.set(s==status_text)
+            selected_statuses[k]={s for s,v in self.status_filters[k]['vars'].items() if v.get()}
         self.save_filter_state()
         args={k:tuple(v.get() for v in self.filters[k]) for k in self.tables}
-        selected_statuses={k:{s for s,v in self.status_filters[k]['vars'].items() if v.get()} for k in self.tables}
         def work():
             data={}
-            for k,(group,manager,suffix,link,comment) in args.items():
+            for k,(group,manager,suffix,link,status_text,comment) in args.items():
                 if group in ('С заявкой','Без заявки'):
                     link='Со связью' if group=='С заявкой' else 'Без связи';group='Все'
                 rows=self.c.rows(k,group,'' if manager=='Все менеджеры' else manager,suffix,link,comment=comment)
