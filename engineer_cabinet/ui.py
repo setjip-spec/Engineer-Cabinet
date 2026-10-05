@@ -37,7 +37,8 @@ class App:
             try:self.w.attributes('-zoomed',True)
             except tk.TclError:pass
         self.pool=ThreadPoolExecutor(max_workers=1)
-        self.results=queue.Queue();self.busy=False;self.tables={};self.filters={};self.cache={}
+        self.results=queue.Queue();self.busy=False;self.tables={};self.filters={};self.status_filters={};self.cache={}
+        self.saved_filters=self.c.preference('filters_v1',{}) or {}
         self.pending_refresh=False;self.pending_report=False;self.search_job=None
         self.notice=tk.StringVar(value='Готово');self.stats=[];self.ready_bonuses=[];self.current_page=0
         style=ttk.Style(window);style.theme_use('clam')
@@ -94,8 +95,42 @@ class App:
         if self.search_job:self.w.after_cancel(self.search_job)
         self.search_job=self.w.after(200,self.refresh)
 
+    def status_filter_changed(self,kind):
+        data=self.status_filters[kind]
+        selected=[s for s,v in data['vars'].items() if v.get()]
+        if len(selected)==len(data['choices']):
+            label='Все статусы'
+        elif not selected:
+            label='Нет статусов'
+        elif len(selected)<=2:
+            label=', '.join(selected)
+        else:
+            label=f'Выбрано: {len(selected)}'
+        data['label'].set(label)
+        self.changed_filter()
+
+    def set_all_status_filters(self,kind,value):
+        for var in self.status_filters[kind]['vars'].values():var.set(value)
+        self.status_filter_changed(kind)
+
+    def filter_snapshot(self):
+        state={}
+        for kind,(group,manager,suffix,link,comment) in self.filters.items():
+            state[kind]={
+                'group':group.get(),'manager':manager.get(),'suffix':suffix.get(),
+                'link':link.get(),'comment':comment.get(),
+                'statuses':[s for s,v in self.status_filters[kind]['vars'].items() if v.get()]
+            }
+        return state
+
+    def save_filter_state(self):
+        self.c.set_preference('filters_v1',self.filter_snapshot())
+
     def reset_filters(self,kind):
-        for var,value in zip(self.filters[kind],('Все','Все менеджеры','','Все','Все статусы','')):var.set(value)
+        group,manager,suffix,link,comment=self.filters[kind]
+        group.set('Все');manager.set('Все менеджеры');suffix.set('');link.set('Все');comment.set('')
+        for var in self.status_filters[kind]['vars'].values():var.set(True)
+        self.status_filter_changed(kind)
         self.refresh()
 
     def run(self, work, done=None, quiet=False):
@@ -133,17 +168,38 @@ class App:
     def build_list(self,kind,title):
         frame=ttk.Frame(self.tabs);self.tabs.add(frame,text=title)
         bar=ttk.Frame(frame);bar.pack(fill='x',pady=(4,18))
-        group=tk.StringVar(value='Все');manager=tk.StringVar(value='Все менеджеры')
-        suffix=tk.StringVar();link=tk.StringVar(value='Все');status=tk.StringVar(value='Все статусы')
-        comment=tk.StringVar();self.filters[kind]=(group,manager,suffix,link,status,comment)
-        groups=['Все','Активные','Готовые']+(['Завершённые'] if kind=='order' else ['С заявкой','Без заявки'])
+        saved=self.saved_filters.get(kind,{}) if isinstance(self.saved_filters,dict) else {}
+        groups=['Все','Активные']+(['Активные + готовые'] if kind=='order' else [])+['Готовые']+(['Завершённые'] if kind=='order' else ['С заявкой','Без заявки'])
+        group_value=saved.get('group','Все');group_value=group_value if group_value in groups else 'Все'
+        manager_value=saved.get('manager','Все менеджеры');manager_value=manager_value if manager_value in ['Все менеджеры',*MANAGERS] else 'Все менеджеры'
+        group=tk.StringVar(value=group_value);manager=tk.StringVar(value=manager_value)
+        suffix=tk.StringVar(value=str(saved.get('suffix','') or ''));link=tk.StringVar(value='Все')
+        comment=tk.StringVar(value=str(saved.get('comment','') or ''));self.filters[kind]=(group,manager,suffix,link,comment)
+        status_choices=[*STATUSES]+([CLOSED] if kind=='order' else [])
+        saved_statuses=saved.get('statuses',status_choices)
+        if not isinstance(saved_statuses,list):saved_statuses=status_choices
+        status_vars={s:tk.BooleanVar(value=s in saved_statuses) for s in status_choices}
+        status_label=tk.StringVar(value='Все статусы')
+        self.status_filters[kind]={'choices':status_choices,'vars':status_vars,'label':status_label}
         for i,(label,var,values) in enumerate((('Поиск по номеру',suffix,None),('Поиск по комментарию',comment,None),('Менеджер',manager,['Все менеджеры',*sorted(MANAGERS)]),
-                ('Статус',status,['Все статусы',*STATUSES]+([CLOSED] if kind=='order' else [])),('Показать',group,groups))):
+                ('Статус',None,None),('Показать',group,groups))):
             cell=ttk.Frame(bar);cell.grid(row=0,column=i,sticky='ew',padx=(0,12));bar.columnconfigure(i,weight=1,uniform='filters')
             ttk.Label(cell,text=label).pack(anchor='w',pady=(0,7))
-            widget=ttk.Entry(cell,textvariable=var,width=12) if values is None else ttk.Combobox(cell,textvariable=var,values=values,state='readonly',width=16)
-            widget.pack(fill='x');widget.bind('<<ComboboxSelected>>',self.changed_filter)
-            if values is None:var.trace_add('write',lambda *a:self.changed_filter())
+            if label=='Статус':
+                widget=ttk.Menubutton(cell,textvariable=status_label)
+                menu=tk.Menu(widget,tearoff=False)
+                for status_name in status_choices:
+                    menu.add_checkbutton(label=status_name,variable=status_vars[status_name],command=lambda k=kind:self.status_filter_changed(k))
+                menu.add_separator()
+                menu.add_command(label='Выбрать все',command=lambda k=kind:self.set_all_status_filters(k,True))
+                menu.add_command(label='Снять все',command=lambda k=kind:self.set_all_status_filters(k,False))
+                widget.configure(menu=menu)
+                widget.pack(fill='x')
+                self.status_filter_changed(kind)
+            else:
+                widget=ttk.Entry(cell,textvariable=var,width=12) if values is None else ttk.Combobox(cell,textvariable=var,values=values,state='readonly',width=16)
+                widget.pack(fill='x');widget.bind('<<ComboboxSelected>>',self.changed_filter)
+                if values is None:var.trace_add('write',lambda *a:self.changed_filter())
         ttk.Button(bar,text='⟳  Сбросить фильтры',command=lambda:self.reset_filters(kind)).grid(row=0,column=5,sticky='s')
         stats=ttk.Frame(frame);stats.pack(fill='x',pady=(0,18));stats.columnconfigure(0,weight=1);stats.columnconfigure(1,weight=1)
         bonusbox=tk.Frame(stats,bg='#e7fbee',highlightthickness=1,highlightbackground='#b8efd0')
@@ -181,14 +237,16 @@ class App:
         if self.busy:self.pending_refresh=True;return
         if any(t.editor for t in self.tables.values()):
             self.notice.set('Enter — сохранить комментарий, Esc — отменить.');return
+        self.save_filter_state()
         args={k:tuple(v.get() for v in self.filters[k]) for k in self.tables}
+        selected_statuses={k:{s for s,v in self.status_filters[k]['vars'].items() if v.get()} for k in self.tables}
         def work():
             data={}
-            for k,(group,manager,suffix,link,status,comment) in args.items():
+            for k,(group,manager,suffix,link,comment) in args.items():
                 if group in ('С заявкой','Без заявки'):
                     link='Со связью' if group=='С заявкой' else 'Без связи';group='Все'
                 rows=self.c.rows(k,group,'' if manager=='Все менеджеры' else manager,suffix,link,comment=comment)
-                data[k]=[r for r in rows if status=='Все статусы' or r['status']==status]
+                data[k]=[r for r in rows if r['status'] in selected_statuses[k]]
             data['all']=self.c.rows('order')
             return data
         def done(data):
@@ -534,6 +592,7 @@ class App:
     def quit(self):
         if self.busy:
             messagebox.showinfo('Операция выполняется','Дождитесь завершения операции перед выходом.');return
+        self.save_filter_state()
         for timer in self.w.tk.call('after','info'):self.w.after_cancel(timer)
         self.pool.shutdown(wait=False);self.c.close();self.w.destroy()
 
