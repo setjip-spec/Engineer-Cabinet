@@ -153,6 +153,24 @@ class Cabinet:
                 raise CabinetError('Запись не найдена.')
             return dict(r)
 
+    def preference(self, key, default=None):
+        """Read a small JSON-serializable UI preference from the local database."""
+        with self.lock:
+            row = self.db.execute('SELECT value FROM meta WHERE key=?', ('preference:'+str(key),)).fetchone()
+            if not row:
+                return default
+            try:
+                return json.loads(row[0])
+            except (TypeError, ValueError):
+                return default
+
+    def set_preference(self, key, value):
+        """Persist a small JSON-serializable UI preference without changing the schema."""
+        payload = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+        with self.lock, self.db:
+            self.db.execute('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)',
+                            ('preference:'+str(key), payload))
+
     def _editable(self, rid):
         r = self.get(rid)
         if r['operation']:
@@ -178,6 +196,8 @@ class Cabinet:
                 if comment.strip().casefold() not in r['comment'].casefold():
                     continue
                 if group == 'Активные' and r['status'] not in STATUSES[:3]:
+                    continue
+                if group == 'Активные + готовые' and r['status'] not in STATUSES:
                     continue
                 if group == 'Готовые' and r['status'] != 'Готово':
                     continue
