@@ -95,7 +95,7 @@ class App:
         if self.search_job:self.w.after_cancel(self.search_job)
         self.search_job=self.w.after(200,self.refresh)
 
-    def status_filter_changed(self,kind):
+    def status_filter_changed(self,kind,trigger=True):
         data=self.status_filters[kind]
         selected=[s for s,v in data['vars'].items() if v.get()]
         if len(selected)==len(data['choices']):
@@ -107,7 +107,7 @@ class App:
         else:
             label=f'Выбрано: {len(selected)}'
         data['label'].set(label)
-        self.changed_filter()
+        if trigger:self.changed_filter()
 
     def set_all_status_filters(self,kind,value):
         for var in self.status_filters[kind]['vars'].values():var.set(value)
@@ -195,7 +195,7 @@ class App:
                 menu.add_command(label='Снять все',command=lambda k=kind:self.set_all_status_filters(k,False))
                 widget.configure(menu=menu)
                 widget.pack(fill='x')
-                self.status_filter_changed(kind)
+                self.status_filter_changed(kind,False)
             else:
                 widget=ttk.Entry(cell,textvariable=var,width=12) if values is None else ttk.Combobox(cell,textvariable=var,values=values,state='readonly',width=16)
                 widget.pack(fill='x');widget.bind('<<ComboboxSelected>>',self.changed_filter)
