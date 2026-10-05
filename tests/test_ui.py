@@ -31,7 +31,7 @@ class WindowTests(unittest.TestCase):
                 status_vars['В работе'].set(True);status_vars['Завершённая'].set(True)
                 app.status_filter_changed('order');pump()
                 self.assertEqual(len(app.tables['order'].get_children()),2)
-                app.filters['order'][0].set('Активные + готовые');app.changed_filter();pump()
+                app.filters['order'][0].set('Активные + готовые');app.refresh();pump()
                 self.assertEqual(app.tables['order'].get_children(),(active['id'],))
                 app.save_filter_state()
                 saved=c.preference('filters_v1')
