@@ -107,6 +107,20 @@ class CabinetTests(unittest.TestCase):
         self.c.update(q['id'],status='Готово');self.assertEqual(len(self.c.rows('quote','Готовые')),1)
         self.assertEqual(len(self.c.rows('quote',suffix='00001')),2);self.order(quote_id=q['id'])
         self.assertEqual(len(self.c.rows('quote',link='Без связи')),2)
+
+    def test_active_plus_ready_and_filter_preferences(self):
+        active=self.order(1);ready=self.order(2);closed=self.order(3)
+        self.c.update(active['id'],status='В работе')
+        self.c.update(ready['id'],status='Готово')
+        self.c.update(closed['id'],amount=1000,month=9)
+        rows=self.c.rows('order','Активные + готовые')
+        self.assertEqual({r['id'] for r in rows},{active['id'],ready['id']})
+        saved={'order':{'group':'Активные + готовые','manager':'Все менеджеры','suffix':'29',
+                        'link':'Все','comment':'камень','statuses':['В работе','Готово']}}
+        self.c.set_preference('filters_v1',saved)
+        self.assertEqual(self.c.preference('filters_v1'),saved)
+        self.c.close();self.c=Cabinet(self.root)
+        self.assertEqual(self.c.preference('filters_v1'),saved)
     def test_reopen(self):
         o=self.order();self.c.update(o['id'],comment='Нужен чертёж',amount='400',month=9)
         self.c.close();self.c=Cabinet(self.root)

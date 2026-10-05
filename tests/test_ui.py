@@ -12,6 +12,7 @@ class WindowTests(unittest.TestCase):
         from engineer_cabinet.ui import App
         with tempfile.TemporaryDirectory() as tmp:
             c=Cabinet(tmp);q=c.create('quote',MANAGERS[0]);o=c.create('order',MANAGERS[0],123,q['id'])
+            active=c.create('order',MANAGERS[0],124);c.update(active['id'],status='В работе')
             c.update(o['id'],amount=100000,month=9)
             root=tk.Tk();errors=[]
             root.report_callback_exception=lambda typ,value,tb:errors.append(str(value))
@@ -25,6 +26,17 @@ class WindowTests(unittest.TestCase):
                     self.fail('UI worker timed out')
                 pump()
                 self.assertEqual(len(app.tables['quote'].get_children()),1)
+                status_vars=app.status_filters['order']['vars']
+                for v in status_vars.values():v.set(False)
+                status_vars['В работе'].set(True);status_vars['Завершённая'].set(True)
+                app.status_filter_changed('order');pump()
+                self.assertEqual(len(app.tables['order'].get_children()),2)
+                app.filters['order'][0].set('Активные + готовые');app.refresh();pump()
+                self.assertEqual(app.tables['order'].get_children(),(active['id'],))
+                app.save_filter_state()
+                saved=c.preference('filters_v1')
+                self.assertEqual(saved['order']['group'],'Активные + готовые')
+                self.assertEqual(saved['order']['statuses'],['В работе','Завершённая'])
                 app.card(o['id']);pump()
                 self.assertTrue(any(isinstance(w,tk.Toplevel) for w in root.winfo_children()))
                 for w in root.winfo_children():
