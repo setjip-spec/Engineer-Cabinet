@@ -56,6 +56,8 @@ class App:
         style.configure('TEntry',padding=9,fieldbackground='white',bordercolor=LINE)
         style.configure('TCombobox',padding=8,fieldbackground='white',background='white',bordercolor=LINE,arrowsize=15)
         style.map('TCombobox',foreground=[('disabled',MUTED),('readonly',INK)],fieldbackground=[('readonly','white')],selectbackground=[('readonly','white')],selectforeground=[('readonly',INK)])
+        style.configure('TMenubutton',padding=8,background='white',foreground=INK,bordercolor=LINE,arrowsize=15)
+        style.map('TMenubutton',background=[('active','#f6f9fd')],foreground=[('disabled',MUTED)])
         style.configure('Treeview',rowheight=44,background='white',fieldbackground='white',bordercolor=LINE)
         style.configure('Treeview.Heading',padding=10,background='#eff4fb',foreground=INK)
         style.map('Treeview',background=[('selected','#dcecff')],foreground=[('selected',INK)])
@@ -130,7 +132,7 @@ class App:
         group,manager,suffix,link,comment=self.filters[kind]
         group.set('Все');manager.set('Все менеджеры');suffix.set('');link.set('Все');comment.set('')
         for var in self.status_filters[kind]['vars'].values():var.set(True)
-        self.status_filter_changed(kind)
+        self.status_filter_changed(kind,False)
         self.refresh()
 
     def run(self, work, done=None, quiet=False):
@@ -187,7 +189,7 @@ class App:
             ttk.Label(cell,text=label).pack(anchor='w',pady=(0,7))
             if label=='Статус':
                 widget=ttk.Menubutton(cell,textvariable=status_label)
-                menu=tk.Menu(widget,tearoff=False)
+                menu=tk.Menu(widget,tearoff=False,font=('Segoe UI',10))
                 for status_name in status_choices:
                     menu.add_checkbutton(label=status_name,variable=status_vars[status_name],command=lambda k=kind:self.status_filter_changed(k))
                 menu.add_separator()
